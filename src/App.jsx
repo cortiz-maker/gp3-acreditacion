@@ -6,6 +6,7 @@ import {
   AlertTriangle, Power, Map, Download,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
+import * as XLSX from "xlsx";
 
 /* ============================================================
    GP3 SPORTS · ACREDITACIÓN — v2
@@ -1304,6 +1305,84 @@ function OrgPilotos({ db, persist }) {
     const pilotos = editId === "__new__" ? [...db.pilotos, { ...f, id: `p${Date.now()}` }] : db.pilotos.map((p) => (p.id === editId ? f : p));
     persist({ ...db, pilotos }); setEditId(null);
   };
+
+  const exportarExcel = () => {
+    const colDef = [
+      ["dorsal", "Dorsal"], ["nombres", "Nombres"], ["apellidos", "Apellidos"],
+      ["__nombre", "Nombre completo"], ["dni", "DNI / Documento"],
+      ["fechaNacimiento", "Fecha de nacimiento"], ["__edad", "Edad"],
+      ["categoria", "Categoría"], ["campeonato", "Campeonato"], ["pais", "País"],
+      ["provincia", "Provincia"], ["localidad", "Localidad"], ["domicilio", "Domicilio"],
+      ["telefono", "Teléfono"], ["nombreAcompanante", "Nombre acompañante"],
+      ["telefonoAcompanante", "Teléfono acompañante"], ["mail", "Mail"],
+      ["marcaMoto", "Marca de la moto"], ["modeloMoto", "Modelo de la moto"],
+      ["equipo", "Equipo"], ["licencia", "Licencia"], ["estadoFicha", "Estado ficha"],
+      ["__foto", "Tiene foto"],
+    ];
+    const filaDe = (p) => {
+      const o = {};
+      colDef.forEach(([k, label]) => {
+        if (k === "__nombre") o[label] = nombreCompleto(p);
+        else if (k === "__edad") { const e = edadDe(p.fechaNacimiento); o[label] = e == null ? "" : e; }
+        else if (k === "__foto") o[label] = p.foto ? "Sí" : "No";
+        else o[label] = p[k] ?? "";
+      });
+      return o;
+    };
+    const ordenar = (arr) => [...arr].sort((a, b) =>
+      (CATEGORIAS.indexOf(a.categoria) - CATEGORIAS.indexOf(b.categoria)) ||
+      ((Number(a.dorsal) || 999) - (Number(b.dorsal) || 999)));
+    const anchos = colDef.map(([, label]) => ({ wch: Math.max(label.length, 12) }));
+    const todos = db.pilotos;
+    const hoy = new Date().toISOString().slice(0, 10);
+
+    const wb = XLSX.utils.book_new();
+
+    // Hoja Resumen
+    const r = [];
+    r.push(["GP3 Sports · Informe ejecutivo de pilotos"]);
+    r.push(["Generado", hoy]);
+    r.push(["Total de pilotos", todos.length]);
+    r.push([]);
+    r.push(["Campeonato", "Total", "Ficha OK", "Pendiente", "Reportó error"]);
+    CAMPEONATOS.forEach((camp) => {
+      const ps = todos.filter((p) => p.campeonato === camp);
+      if (!ps.length) return;
+      r.push([camp, ps.length,
+        ps.filter((p) => p.estadoFicha === "confirmada").length,
+        ps.filter((p) => !p.estadoFicha || p.estadoFicha === "pendiente").length,
+        ps.filter((p) => p.estadoFicha === "rechazada").length]);
+    });
+    r.push([]);
+    r.push(["Campeonato", "Categoría", "Pilotos"]);
+    CAMPEONATOS.forEach((camp) => {
+      const ps = todos.filter((p) => p.campeonato === camp);
+      CATEGORIAS.forEach((cat) => {
+        const n = ps.filter((p) => p.categoria === cat).length;
+        if (n) r.push([camp, cat, n]);
+      });
+    });
+    const wsR = XLSX.utils.aoa_to_sheet(r);
+    wsR["!cols"] = [{ wch: 42 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 14 }];
+    XLSX.utils.book_append_sheet(wb, wsR, "Resumen");
+
+    // Hoja Todos
+    const wsAll = XLSX.utils.json_to_sheet(ordenar(todos).map(filaDe));
+    wsAll["!cols"] = anchos;
+    XLSX.utils.book_append_sheet(wb, wsAll, "Todos");
+
+    // Una hoja por campeonato
+    CAMPEONATOS.forEach((camp) => {
+      const ps = ordenar(todos.filter((p) => p.campeonato === camp));
+      if (!ps.length) return;
+      const ws = XLSX.utils.json_to_sheet(ps.map(filaDe));
+      ws["!cols"] = anchos;
+      const nombreHoja = (CAMP_META[camp]?.abbr || camp).slice(0, 28);
+      XLSX.utils.book_append_sheet(wb, ws, nombreHoja);
+    });
+
+    XLSX.writeFile(wb, `GP3-Informe-Pilotos-${hoy}.xlsx`);
+  };
   const t = q.trim().toLowerCase();
   const lista = db.pilotos.filter((p) => !t || nombreCompleto(p).toLowerCase().includes(t) || String(p.dorsal) === t || (p.dni || "").toLowerCase().replace(/[.\s]/g, "").includes(t.replace(/[.\s]/g, "")));
   const orden = (p) => [CAMPEONATOS.indexOf(p.campeonato), CATEGORIAS.indexOf(p.categoria), Number(p.dorsal) || 999];
@@ -1315,7 +1394,7 @@ function OrgPilotos({ db, persist }) {
 
   return (
     <div className="panel">
-      <div className="panel-head"><h3>Ficha base de pilotos</h3><button className="btn-primary sm" onClick={nuevo}><Plus size={15} /> Nuevo piloto</button></div>
+      <div className="panel-head"><h3>Ficha base de pilotos</h3><div className="head-actions"><button className="btn-outline sm" onClick={exportarExcel} disabled={!db.pilotos.length}><Download size={15} /> Informe ejecutivo</button><button className="btn-primary sm" onClick={nuevo}><Plus size={15} /> Nuevo piloto</button></div></div>
       <p className="muted small">Lo que cargues aquí es lo que el piloto verá precargado para validar o reportar.</p>
       <div className="search org"><Search size={16} /><input placeholder="Buscar piloto por nombre, dorsal o documento…" value={q} onChange={(e) => setQ(e.target.value)} /></div>
 
@@ -1948,6 +2027,7 @@ select.inp{appearance:auto}
 
 .org-pilotos{display:flex;flex-direction:column;gap:8px;margin-top:12px}
 .org-prow{display:flex;align-items:center;gap:14px;border:1px solid var(--line);border-radius:11px;padding:10px 14px}
+.head-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 .camp-groups{display:flex;flex-direction:column;gap:10px;margin-top:12px}
 .camp-card{border:1px solid var(--line);border-radius:13px;overflow:hidden;background:#fff}
 .camp-card.open{border-color:var(--carbon)}
