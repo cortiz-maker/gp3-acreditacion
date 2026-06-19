@@ -27,8 +27,14 @@ const CAMPEONATOS = [
 const CATEGORIAS = [
   "Gp1 Talent", "Gp3 Cup Amateur", "Gp3 Cup Promocional", "Gp3 Cup Experto",
   "Sportbike 7", "SBK Amateur", "SBK Promocional", "SBK Experto", "SBK Senior", "SBK Pro",
+  "Moto4",
 ];
-const PAISES = ["Chile", "Argentina", "Brasil"];
+const PAISES = [
+  "Argentina", "Bolivia", "Brasil", "Chile", "Colombia", "Costa Rica", "Cuba",
+  "Ecuador", "El Salvador", "Estados Unidos", "Guatemala", "Honduras", "México",
+  "Nicaragua", "Palestina", "Panamá", "Paraguay", "Perú", "Puerto Rico",
+  "República Dominicana", "Uruguay", "Venezuela",
+];
 
 /* Identidad visual por campeonato (placeholder hasta cargar logos reales) */
 const CAMP_META = {
@@ -182,6 +188,18 @@ function mediosDe(campeonato) {
 const fmtMoneda = (n, m) => `${m} $${new Intl.NumberFormat("es-CL").format(Math.round(Number(n) || 0))}`;
 
 /* ---------- Campos de la ficha CAMOD ---------- */
+const MOTO4_CAMP = "Moto 4 (Latin American Cup)";
+/* Moto 4 es monomarca: al elegir el campeonato, fija categoría y moto */
+function aplicarAuto(state, k, v) {
+  const next = { ...state, [k]: v };
+  if (k === "campeonato" && v === MOTO4_CAMP) {
+    next.categoria = "Moto4";
+    next.marcaMoto = "Honda";
+    next.modeloMoto = "NSF250R";
+  }
+  return next;
+}
+
 const FICHA_FIELDS = [
   { k: "dorsal", label: "Número de moto (Dorsal)", mono: true },
   { k: "categoria", label: "Categoría", type: "select", opts: CATEGORIAS },
@@ -1113,7 +1131,7 @@ function FechaMaintainer({ db, upcoming, toggleFecha }) {
 
 function StaffEditForm({ piloto, onSave, onCancel }) {
   const [f, setF] = useState(piloto);
-  const campo = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const campo = (k, v) => setF((s) => aplicarAuto(s, k, v));
   return (
     <>
       <FichaFields data={f} edit onChange={campo} />
@@ -1397,7 +1415,7 @@ function OrgPilotos({ db, persist }) {
   const [verPerfil, setVerPerfil] = useState(null);
   const vacio = { id: "", dorsal: "", categoria: CATEGORIAS[0], campeonato: CAMPEONATOS[1], nombres: "", apellidos: "", dni: "", fechaNacimiento: "", pais: "Chile", provincia: "", localidad: "", domicilio: "", telefono: "", nombreAcompanante: "", telefonoAcompanante: "", mail: "", marcaMoto: "", modeloMoto: "", equipo: "", licencia: "", estadoFicha: "pendiente", foto: "" };
   const [f, setF] = useState(vacio);
-  const campo = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const campo = (k, v) => setF((s) => aplicarAuto(s, k, v));
   const editar = (p) => { setEditId(p.id); setF(p); };
   const nuevo = () => { setEditId("__new__"); setF(vacio); };
   const guardar = () => {
