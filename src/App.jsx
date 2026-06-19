@@ -946,6 +946,7 @@ function AcreditacionFlow({ db, persist }) {
   const [pase, setPase] = useState(null);
   const [editPiloto, setEditPiloto] = useState(null);
   const [cobrando, setCobrando] = useState(null);
+  const [filtroEstado, setFiltroEstado] = useState(null); // acreditado | poracr | pre | sinreg
 
   const fecha = TODAS_FECHAS[fechaId];
   const serie = fechaId.startsWith("cav") ? "CAV" : "CCV";
@@ -959,10 +960,14 @@ function AcreditacionFlow({ db, persist }) {
     if (p.estadoFicha === "confirmada") return 2;
     return 3;
   };
+  const estadoDe = (p) => { const a = acrDe(p.id); return a?.estado === "acreditado" ? "acreditado" : a?.estado === "pre-acreditado" ? "pre" : "sinreg"; };
   const filtrados = pilotosFecha.filter((p) => {
+    if (filtroEstado) { const e = estadoDe(p); if (filtroEstado === "poracr" ? e === "acreditado" : e !== filtroEstado) return false; }
     const t = q.trim().toLowerCase(); if (!t) return true;
     return nombreCompleto(p).toLowerCase().includes(t) || String(p.dorsal) === t || (p.dni || "").toLowerCase().replace(/[.\s]/g, "").includes(t.replace(/[.\s]/g, ""));
   }).sort((a, b) => prioridad(a) - prioridad(b) || (Number(a.dorsal) || 999) - (Number(b.dorsal) || 999));
+  const FILTRO_LABEL = { acreditado: "Acreditados", poracr: "Por acreditar", pre: "Pre-acreditados", sinreg: "Sin registro" };
+  const verLista = q.trim() || filtroEstado;
   const nPre = pilotosFecha.filter((p) => acrDe(p.id)?.estado === "pre-acreditado").length;
   const nTotal = pilotosFecha.length;
   const nAcr = pilotosFecha.filter((p) => acrDe(p.id)?.estado === "acreditado").length;
@@ -1032,19 +1037,21 @@ function AcreditacionFlow({ db, persist }) {
         </div>
         <div className="resumen-bar"><div className="resumen-fill" style={{ width: pctAcr + "%" }} /></div>
         <div className="resumen-stats">
-          <div className="rstat ok"><b>{nAcr}</b><span>Acreditados</span></div>
-          <div className="rstat pend"><b>{nPorAcr}</b><span>Por acreditar</span></div>
-          <div className="rstat pre"><b>{nPre}</b><span>Pre-acreditados</span></div>
-          <div className="rstat none"><b>{nSinReg}</b><span>Sin registro</span></div>
+          <button className={"rstat ok" + (filtroEstado === "acreditado" ? " on" : "")} onClick={() => setFiltroEstado(filtroEstado === "acreditado" ? null : "acreditado")}><b>{nAcr}</b><span>Acreditados</span></button>
+          <button className={"rstat pend" + (filtroEstado === "poracr" ? " on" : "")} onClick={() => setFiltroEstado(filtroEstado === "poracr" ? null : "poracr")}><b>{nPorAcr}</b><span>Por acreditar</span></button>
+          <button className={"rstat pre" + (filtroEstado === "pre" ? " on" : "")} onClick={() => setFiltroEstado(filtroEstado === "pre" ? null : "pre")}><b>{nPre}</b><span>Pre-acreditados</span></button>
+          <button className={"rstat none" + (filtroEstado === "sinreg" ? " on" : "")} onClick={() => setFiltroEstado(filtroEstado === "sinreg" ? null : "sinreg")}><b>{nSinReg}</b><span>Sin registro</span></button>
         </div>
       </div>
 
       {nPre > 0 && <div className="info-bar"><ClipboardCheck size={15} /> {nPre} piloto(s) pre-acreditado(s) en esta fecha — emite e imprime su pase para firmar, timbrar y entregar a CAMOD.</div>}
 
+      {filtroEstado && <div className="filtro-chip">Mostrando: <b>{FILTRO_LABEL[filtroEstado]}</b> ({filtrados.length})<button onClick={() => setFiltroEstado(null)}><X size={13} /> Limpiar</button></div>}
+
       <div className="staff-list">
-        {!q.trim() && <div className="hint-row"><Search size={14} /> Busca un piloto por dorsal, nombre o documento para acreditarlo.</div>}
-        {q.trim() && filtrados.length === 0 && <div className="empty">Sin pilotos para “{q}” en {fecha.n}.</div>}
-        {q.trim() && filtrados.map((p) => {
+        {!verLista && <div className="hint-row"><Search size={14} /> Busca un piloto, o toca una tarjeta del resumen para ver esos pilotos.</div>}
+        {verLista && filtrados.length === 0 && <div className="empty">Sin pilotos {q.trim() ? "para “" + q + "”" : "en esta condición"} en {fecha.n}.</div>}
+        {verLista && filtrados.map((p) => {
           const a = acrDe(p.id);
           const reportado = p.estadoFicha === "rechazada";
           return (
@@ -2127,6 +2134,12 @@ select.inp{appearance:auto}
 .rstat.pend b{color:#B45309}
 .rstat.pre b{color:#9A6A00}
 .rstat.none b{color:#64748B}
+.rstat{border:1px solid transparent;cursor:pointer;font-family:inherit;transition:all .15s}
+.rstat:hover{background:#EEF1F6}
+.rstat.on{border-color:currentColor;box-shadow:0 0 0 2px rgba(0,0,0,.04)}
+.rstat.ok.on{border-color:#16A34A}.rstat.pend.on{border-color:#B45309}.rstat.pre.on{border-color:#9A6A00}.rstat.none.on{border-color:#64748B}
+.filtro-chip{display:flex;align-items:center;gap:6px;font-size:.82rem;color:#3A4456;background:#EEF1F6;border-radius:8px;padding:6px 10px;margin-bottom:10px;width:fit-content}
+.filtro-chip button{display:inline-flex;align-items:center;gap:3px;margin-left:6px;background:#fff;border:1px solid #D7DBE2;border-radius:6px;padding:3px 8px;cursor:pointer;color:#3A4456;font-size:.8rem}
 @media(max-width:520px){.resumen-stats{grid-template-columns:repeat(2,1fr)}}
 .row-obs{display:block;margin-top:3px;font-size:.78rem;color:#9A6A00;background:#FFF3B0;border-radius:6px;padding:3px 8px;line-height:1.3}
 .save-err-bar{display:flex;align-items:center;gap:8px;background:#FDECEC;color:#B42318;border:1px solid #F4B5B0;border-radius:8px;padding:8px 12px;margin:10px 16px;font-size:.85rem}
