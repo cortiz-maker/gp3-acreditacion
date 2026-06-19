@@ -975,15 +975,16 @@ function AcreditacionFlow({ db, persist }) {
       {nPre > 0 && <div className="info-bar"><ClipboardCheck size={15} /> {nPre} piloto(s) pre-acreditado(s) en esta fecha — emite e imprime su pase para firmar, timbrar y entregar a CAMOD.</div>}
 
       <div className="staff-list">
-        {filtrados.length === 0 && <div className="empty">Sin pilotos para esta búsqueda en {fecha.n}.</div>}
-        {filtrados.map((p) => {
+        {!q.trim() && <div className="hint-row"><Search size={14} /> Busca un piloto por dorsal, nombre o documento para acreditarlo.</div>}
+        {q.trim() && filtrados.length === 0 && <div className="empty">Sin pilotos para “{q}” en {fecha.n}.</div>}
+        {q.trim() && filtrados.map((p) => {
           const a = acrDe(p.id);
           const reportado = p.estadoFicha === "rechazada";
           return (
             <div key={p.id} className={`staff-row ${reportado ? "flagged" : ""}`}>
               <span className="row-dorsal">{p.dorsal}</span>
               <CampLogo campeonato={p.campeonato} size={34} />
-              <div className="row-info"><b>{nombreCompleto(p)}</b><span className="muted small">{p.categoria} · {p.equipo} · {p.dni}</span></div>
+              <div className="row-info"><b>{nombreCompleto(p)}</b><span className="muted small">{p.categoria} · {p.equipo} · {p.dni}</span>{a?.obs && <span className="row-obs"><AlertTriangle size={11} /> {a.obs}</span>}</div>
               <div className="row-state">
                 {a?.estado === "acreditado" ? <span className="state-chip ok"><BadgeCheck size={14} /> {a.folio}</span>
                   : reportado ? <span className="state-chip red"><AlertTriangle size={14} /> Reportó error</span>
@@ -2044,6 +2045,7 @@ select.inp{appearance:auto}
 .search.org{margin-top:14px;flex:none}
 .search input{border:0;outline:0;padding:11px 0;width:100%;font-size:.95rem;background:transparent}
 .staff-list{display:flex;flex-direction:column;gap:8px}
+.row-obs{display:block;margin-top:3px;font-size:.78rem;color:#9A6A00;background:#FFF3B0;border-radius:6px;padding:3px 8px;line-height:1.3}
 .staff-row{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:11px 14px}
 .staff-row.flagged{border-color:#F3C2C2;background:#FFFafa}
 .row-dorsal{font-family:var(--disp);font-weight:800;font-size:1.5rem;background:var(--carbon);color:#fff;min-width:54px;height:48px;display:grid;place-items:center;border-radius:9px}
