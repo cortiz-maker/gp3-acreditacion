@@ -6,6 +6,7 @@ import {
   AlertTriangle, Power, Map, Download,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
+
 /* ============================================================
    GP3 SPORTS · ACREDITACIÓN — v2
    Ficha CAMOD (solo lectura para el piloto, con rechazo)
@@ -454,7 +455,7 @@ function seed() {
   return { pilotos, resultados: R, acreditaciones: [], abonos: [], fechasEstado, acreditador: "Equipo GP3 Sports", v: 5 };
 }
 
-/* ---------- Persistencia ---------- */
+/* ---------- Persistencia (Supabase) ---------- */
 const DB_KEY = "gp3-acred-db-v5";
 const ADMIN_PIN = "2026";
 let MEM = null;
@@ -481,6 +482,7 @@ async function saveDB(db) {
     if (error) throw error;
   } catch (e) { console.error("saveDB", e); }
 }
+
 /* ---------- Helpers ---------- */
 function ultimoResultado(db, pilotoId) {
   const rs = db.resultados
@@ -560,7 +562,7 @@ function CampLogo({ campeonato, size = 40 }) {
 /* ---------------- Landing ---------------- */
 function Landing({ onPick }) {
   const lanes = [
-    { id: "acreditacion", icon: <ShieldCheck size={22} />, kicker: "Acreditación", title: "Gestiona tu acreditación", desc: "Paso 1: ingreso y validación de la información del piloto. Paso 2: inicia las fechas y emite los pases." },
+    { id: "acreditacion", icon: <ShieldCheck size={22} />, kicker: "Acreditación", title: "Acreditar pilotos", desc: "Flujo único: elige el piloto de la lista, edita su ficha, cobra o registra el abono y emite el pase para imprimir." },
     { id: "org", icon: <Users size={22} />, kicker: "Organización · Mantenedor", title: "Pilotos, calendario y ranking", desc: "Crea y edita los pilotos, gestiona el calendario y administra los puntajes y el ranking." },
   ];
   return (
@@ -938,13 +940,15 @@ function AcreditacionFlow({ db, persist }) {
   const guardarEdicion = (data) => {
     persist({ ...db, pilotos: db.pilotos.map((p) => (p.id === data.id ? { ...data, estadoFicha: "confirmada" } : p)) });
     setEditPiloto(null);
+    setCobrando({ ...data, estadoFicha: "confirmada" }); // Paso 2: cobro / abono
   };
 
   if (pase) return <PaseView {...pase} onBack={() => setPase(null)} />;
   if (editPiloto) return (
     <div className="panel">
-      <div className="panel-head"><h3>Corregir ficha · {nombreCompleto(editPiloto)}</h3><button className="btn-ghost" onClick={() => setEditPiloto(null)}><X size={14} /> Cancelar</button></div>
-      <div className="inline-warn"><AlertTriangle size={15} /> El piloto reportó un error. Corrige los datos y guarda para dejar la ficha lista para acreditar.</div>
+      <div className="panel-head"><h3>Paso 1 · Editar ficha · {nombreCompleto(editPiloto)}</h3><button className="btn-ghost" onClick={() => setEditPiloto(null)}><X size={14} /> Cancelar</button></div>
+      <div className="info-bar"><ClipboardCheck size={15} /> Revisa y completa los datos del piloto. Al guardar pasarás al cobro y luego a la emisión del pase.</div>
+      {editPiloto.estadoFicha === "rechazada" && <div className="inline-warn"><AlertTriangle size={15} /> El piloto reportó un error en su ficha — corrígelo antes de continuar.</div>}
       <StaffEditForm piloto={editPiloto} onSave={guardarEdicion} onCancel={() => setEditPiloto(null)} />
     </div>
   );
@@ -987,10 +991,9 @@ function AcreditacionFlow({ db, persist }) {
                   : <span className="state-chip warn"><Clock size={14} /> Sin confirmar</span>}
               </div>
               <div className="row-cta">
-                {a?.estado === "acreditado" ? <button className="btn-ghost" onClick={() => setPase({ reg: a, piloto: p, fecha })}><Printer size={15} /> Ver / imprimir pase</button>
-                  : reportado ? <button className="btn-outline sm" onClick={() => setEditPiloto(p)}><Pencil size={14} /> Revisar y corregir</button>
-                  : a?.estado === "pre-acreditado" ? <button className="btn-primary sm" onClick={() => setCobrando(p)}><Printer size={15} /> Emitir e imprimir pase</button>
-                  : <button className="btn-secondary sm" onClick={() => setCobrando(p)}><ShieldCheck size={15} /> Validar y emitir</button>}
+                {a?.estado === "acreditado"
+                  ? <><button className="btn-ghost" onClick={() => setPase({ reg: a, piloto: p, fecha })}><Printer size={15} /> Ver / imprimir pase</button><button className="btn-outline sm" onClick={() => setEditPiloto(p)}><Pencil size={14} /> Editar</button></>
+                  : <button className="btn-secondary sm" onClick={() => setEditPiloto(p)}><Pencil size={14} /> Editar y acreditar</button>}
               </div>
             </div>
           );
@@ -1040,7 +1043,7 @@ function StaffEditForm({ piloto, onSave, onCancel }) {
       <FichaFields data={f} edit onChange={campo} />
       <div className="panel-actions">
         <button className="btn-ghost" onClick={onCancel}><X size={14} /> Cancelar</button>
-        <button className="btn-primary" onClick={() => onSave(f)}><Save size={15} /> Guardar y dejar lista</button>
+        <button className="btn-primary" onClick={() => onSave(f)}><Save size={15} /> Guardar y continuar al cobro</button>
       </div>
     </>
   );
@@ -1089,7 +1092,7 @@ function CobroModal({ db, piloto, fecha, onClose, onConfirm }) {
     <div className="modal-back" onClick={onClose}>
       <div className="modal cobro" onClick={(e) => e.stopPropagation()}>
         <div className="cobro-head">
-          <div><b>{modo === "abono" ? "Abono de temporada" : "Cobro de la fecha"}</b><span className="muted small">{nombreCompleto(piloto)} · {fecha.n}</span></div>
+          <div><b>Paso 2 · {modo === "abono" ? "Abono de temporada" : "Cobro de la fecha"}</b><span className="muted small">{nombreCompleto(piloto)} · {fecha.n}</span></div>
           {multi
             ? <div className="moneda-sel"><span className="multi-badge">multimoneda</span>{monedas.map((mo) => <button key={mo} className={`mon ${moneda === mo ? "on" : ""}`} onClick={() => cambiarMoneda(mo)}>{mo}</button>)}</div>
             : <span className="moneda-fija">{moneda}{modo === "abono" ? " · anual" : ""}</span>}
