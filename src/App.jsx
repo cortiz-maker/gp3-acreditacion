@@ -1280,12 +1280,36 @@ function AdminPinModal({ onOk, onClose }) {
   );
 }
 
-function OrgPilotoRow({ p, onEdit }) {
+function PerfilPiloto({ db, piloto, onClose }) {
+  const [tab, setTab] = useState("ficha");
+  const tabs = [
+    { id: "ficha", label: "Ficha", icon: <User size={15} /> },
+    { id: "historia", label: "Historia · Fechas corridas", icon: <Clock size={15} /> },
+    { id: "ranking", label: "Ranking actualizado", icon: <Trophy size={15} /> },
+  ];
+  return (
+    <div className="portal">
+      <div className="panel-head"><h3>Perfil del piloto</h3><button className="btn-ghost" onClick={onClose}><ArrowLeft size={14} /> Volver a la lista</button></div>
+      <PilotoHeader piloto={piloto} />
+      <nav className="subnav">
+        {tabs.map((t) => (
+          <button key={t.id} className={`subnav-btn ${tab === t.id ? "on" : ""}`} onClick={() => setTab(t.id)}>{t.icon}<span>{t.label}</span></button>
+        ))}
+      </nav>
+      {tab === "ficha" && <div className="panel"><div className="panel-head"><h3>Datos del piloto</h3></div><FichaFields data={piloto} onChange={() => {}} /></div>}
+      {tab === "historia" && <PilotoHistoria db={db} piloto={piloto} />}
+      {tab === "ranking" && <PilotoRanking db={db} piloto={piloto} />}
+    </div>
+  );
+}
+
+function OrgPilotoRow({ p, onEdit, onVer }) {
   return (
     <div className="org-prow">
       <span className="row-dorsal sm">{p.dorsal}</span>
       <div className="row-info"><b>{nombreCompleto(p)}</b><span className="muted small">{p.dni} · {p.marcaMoto} {p.modeloMoto} · {p.equipo}</span></div>
       {p.estadoFicha === "rechazada" && <span className="state-chip red sm"><AlertTriangle size={12} /> Error</span>}
+      <button className="btn-outline sm" onClick={onVer}><User size={14} /> Ver perfil</button>
       <button className="btn-ghost" onClick={onEdit}><Pencil size={14} /> Editar</button>
     </div>
   );
@@ -1295,6 +1319,7 @@ function OrgPilotos({ db, persist }) {
   const [editId, setEditId] = useState(null);
   const [q, setQ] = useState("");
   const [campAbierto, setCampAbierto] = useState(null);
+  const [verPerfil, setVerPerfil] = useState(null);
   const vacio = { id: "", dorsal: "", categoria: CATEGORIAS[0], campeonato: CAMPEONATOS[1], nombres: "", apellidos: "", dni: "", fechaNacimiento: "", pais: "Chile", provincia: "", localidad: "", domicilio: "", telefono: "", nombreAcompanante: "", telefonoAcompanante: "", mail: "", marcaMoto: "", modeloMoto: "", equipo: "", licencia: "", estadoFicha: "pendiente", foto: "" };
   const [f, setF] = useState(vacio);
   const campo = (k, v) => setF((s) => ({ ...s, [k]: v }));
@@ -1392,6 +1417,8 @@ function OrgPilotos({ db, persist }) {
     return 0;
   });
 
+  if (verPerfil) return <PerfilPiloto db={db} piloto={verPerfil} onClose={() => setVerPerfil(null)} />;
+
   return (
     <div className="panel">
       <div className="panel-head"><h3>Ficha base de pilotos</h3><div className="head-actions"><button className="btn-outline sm" onClick={exportarExcel} disabled={!db.pilotos.length}><Download size={15} /> Informe ejecutivo</button><button className="btn-primary sm" onClick={nuevo}><Plus size={15} /> Nuevo piloto</button></div></div>
@@ -1414,7 +1441,7 @@ function OrgPilotos({ db, persist }) {
                   lastCat = p.categoria;
                   out.push(<div key={`cat-${p.campeonato}-${p.categoria}`} className="grp-cat">{p.categoria}</div>);
                 }
-                out.push(<OrgPilotoRow key={p.id} p={p} onEdit={() => editar(p)} />);
+                out.push(<OrgPilotoRow key={p.id} p={p} onEdit={() => editar(p)} onVer={() => setVerPerfil(p)} />);
               });
               return out;
             })()}
@@ -1441,7 +1468,7 @@ function OrgPilotos({ db, persist }) {
                         let lastCat = null; const out = [];
                         ps.forEach((p) => {
                           if (p.categoria !== lastCat) { lastCat = p.categoria; out.push(<div key={`cat-${camp}-${p.categoria}`} className="grp-cat">{p.categoria}</div>); }
-                          out.push(<OrgPilotoRow key={p.id} p={p} onEdit={() => editar(p)} />);
+                          out.push(<OrgPilotoRow key={p.id} p={p} onEdit={() => editar(p)} onVer={() => setVerPerfil(p)} />);
                         });
                         return out;
                       })()}
