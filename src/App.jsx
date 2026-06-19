@@ -1279,9 +1279,21 @@ function AdminPinModal({ onOk, onClose }) {
   );
 }
 
+function OrgPilotoRow({ p, onEdit }) {
+  return (
+    <div className="org-prow">
+      <span className="row-dorsal sm">{p.dorsal}</span>
+      <div className="row-info"><b>{nombreCompleto(p)}</b><span className="muted small">{p.dni} · {p.marcaMoto} {p.modeloMoto} · {p.equipo}</span></div>
+      {p.estadoFicha === "rechazada" && <span className="state-chip red sm"><AlertTriangle size={12} /> Error</span>}
+      <button className="btn-ghost" onClick={onEdit}><Pencil size={14} /> Editar</button>
+    </div>
+  );
+}
+
 function OrgPilotos({ db, persist }) {
   const [editId, setEditId] = useState(null);
   const [q, setQ] = useState("");
+  const [campAbierto, setCampAbierto] = useState(null);
   const vacio = { id: "", dorsal: "", categoria: CATEGORIAS[0], campeonato: CAMPEONATOS[1], nombres: "", apellidos: "", dni: "", fechaNacimiento: "", pais: "Chile", provincia: "", localidad: "", domicilio: "", telefono: "", nombreAcompanante: "", telefonoAcompanante: "", mail: "", marcaMoto: "", modeloMoto: "", equipo: "", licencia: "", estadoFicha: "pendiente", foto: "" };
   const [f, setF] = useState(vacio);
   const campo = (k, v) => setF((s) => ({ ...s, [k]: v }));
@@ -1308,30 +1320,61 @@ function OrgPilotos({ db, persist }) {
       <div className="search org"><Search size={16} /><input placeholder="Buscar piloto por nombre, dorsal o documento…" value={q} onChange={(e) => setQ(e.target.value)} /></div>
 
       <div className="org-pilotos">
-        {(() => {
-          let lastCamp = null, lastCat = null;
-          const out = [];
-          listaOrd.forEach((p) => {
-            if (p.campeonato !== lastCamp) {
-              lastCamp = p.campeonato; lastCat = null;
-              out.push(<div key={`c-${p.campeonato}`} className="grp-camp"><CampLogo campeonato={p.campeonato} size={26} /> {p.campeonato}</div>);
-            }
-            if (p.categoria !== lastCat) {
-              lastCat = p.categoria;
-              out.push(<div key={`cat-${p.campeonato}-${p.categoria}`} className="grp-cat">{p.categoria}</div>);
-            }
-            out.push(
-              <div key={p.id} className="org-prow">
-                <span className="row-dorsal sm">{p.dorsal}</span>
-                <div className="row-info"><b>{nombreCompleto(p)}</b><span className="muted small">{p.dni} · {p.marcaMoto} {p.modeloMoto} · {p.equipo}</span></div>
-                {p.estadoFicha === "rechazada" && <span className="state-chip red sm"><AlertTriangle size={12} /> Error</span>}
-                <button className="btn-ghost" onClick={() => editar(p)}><Pencil size={14} /> Editar</button>
-              </div>
-            );
-          });
-          return out;
-        })()}
-        {listaOrd.length === 0 && <div className="empty">Sin coincidencias para “{q}”.</div>}
+        {t ? (
+          /* Modo búsqueda: filas que coinciden, agrupadas por campeonato y categoría */
+          <>
+            {(() => {
+              let lastCamp = null, lastCat = null;
+              const out = [];
+              listaOrd.forEach((p) => {
+                if (p.campeonato !== lastCamp) {
+                  lastCamp = p.campeonato; lastCat = null;
+                  out.push(<div key={`c-${p.campeonato}`} className="grp-camp"><CampLogo campeonato={p.campeonato} size={26} /> {p.campeonato}</div>);
+                }
+                if (p.categoria !== lastCat) {
+                  lastCat = p.categoria;
+                  out.push(<div key={`cat-${p.campeonato}-${p.categoria}`} className="grp-cat">{p.categoria}</div>);
+                }
+                out.push(<OrgPilotoRow key={p.id} p={p} onEdit={() => editar(p)} />);
+              });
+              return out;
+            })()}
+            {listaOrd.length === 0 && <div className="empty">Sin coincidencias para “{q}”.</div>}
+          </>
+        ) : (
+          /* Modo por defecto: agrupado por campeonato; las fichas se abren por grupo */
+          <div className="camp-groups">
+            {CAMPEONATOS.map((camp) => {
+              const ps = listaOrd.filter((p) => p.campeonato === camp);
+              if (ps.length === 0) return null;
+              const abierto = campAbierto === camp;
+              return (
+                <div key={camp} className={`camp-card ${abierto ? "open" : ""}`}>
+                  <button className="camp-card-head" onClick={() => setCampAbierto(abierto ? null : camp)}>
+                    <CampLogo campeonato={camp} size={28} />
+                    <span className="camp-card-name">{camp}</span>
+                    <span className="camp-card-count">{ps.length} piloto{ps.length === 1 ? "" : "s"}</span>
+                    <ChevronRight size={18} className={`camp-card-chev ${abierto ? "open" : ""}`} />
+                  </button>
+                  {abierto && (
+                    <div className="camp-card-body">
+                      {(() => {
+                        let lastCat = null; const out = [];
+                        ps.forEach((p) => {
+                          if (p.categoria !== lastCat) { lastCat = p.categoria; out.push(<div key={`cat-${camp}-${p.categoria}`} className="grp-cat">{p.categoria}</div>); }
+                          out.push(<OrgPilotoRow key={p.id} p={p} onEdit={() => editar(p)} />);
+                        });
+                        return out;
+                      })()}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {db.pilotos.length === 0 && <div className="empty">Aún no hay pilotos cargados. Crea el primero con “Nuevo piloto”.</div>}
+            <div className="hint-row"><Search size={14} /> Abre un campeonato, busca un piloto o crea uno nuevo para ver y editar las fichas.</div>
+          </div>
+        )}
       </div>
 
       {editId && (
@@ -1905,6 +1948,17 @@ select.inp{appearance:auto}
 
 .org-pilotos{display:flex;flex-direction:column;gap:8px;margin-top:12px}
 .org-prow{display:flex;align-items:center;gap:14px;border:1px solid var(--line);border-radius:11px;padding:10px 14px}
+.camp-groups{display:flex;flex-direction:column;gap:10px;margin-top:12px}
+.camp-card{border:1px solid var(--line);border-radius:13px;overflow:hidden;background:#fff}
+.camp-card.open{border-color:var(--carbon)}
+.camp-card-head{display:flex;align-items:center;gap:12px;width:100%;padding:14px 16px;background:#fff;border:none;cursor:pointer;text-align:left}
+.camp-card-head:hover{background:#F7F8FA}
+.camp-card-name{flex:1;font-family:var(--disp);text-transform:uppercase;letter-spacing:.03em;font-size:.95rem;color:var(--carbon)}
+.camp-card-count{font-family:var(--disp);font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:#F1F3F7;border-radius:999px;padding:4px 10px}
+.camp-card-chev{color:var(--muted);transition:transform .15s ease}
+.camp-card-chev.open{transform:rotate(90deg)}
+.camp-card-body{padding:4px 16px 16px;display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line)}
+.hint-row{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:.85rem;padding:12px 4px 2px}
 .filtros{display:flex;gap:14px;flex-wrap:wrap;margin:14px 0}
 .sel-inline{display:flex;flex-direction:column;gap:4px;font-family:var(--disp);text-transform:uppercase;letter-spacing:.08em;font-size:.7rem;color:var(--muted);font-weight:600}
 .sel-inline select{font-family:var(--sans);text-transform:none;letter-spacing:0;font-size:.92rem;font-weight:500;padding:9px 11px;border:1px solid var(--line);border-radius:9px;color:var(--ink);background:#fff;min-width:220px}
