@@ -5,7 +5,7 @@ import {
   ArrowLeft, Pencil, BadgeCheck, Clock, LogOut, Save, Lock, Unlock,
   AlertTriangle, Power, Map, Download,
 } from "lucide-react";
-
+import { supabase } from "./supabaseClient";
 /* ============================================================
    GP3 SPORTS · ACREDITACIÓN — v2
    Ficha CAMOD (solo lectura para el piloto, con rechazo)
