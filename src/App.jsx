@@ -458,16 +458,29 @@ function seed() {
 const DB_KEY = "gp3-acred-db-v5";
 const ADMIN_PIN = "2026";
 let MEM = null;
-const hasStore = typeof window !== "undefined" && window.storage;
+
 async function loadDB() {
-  if (hasStore) { try { const r = await window.storage.get(DB_KEY); if (r && r.value) return JSON.parse(r.value); } catch (e) {} }
+  try {
+    const { data, error } = await supabase
+      .from("app_state")
+      .select("value")
+      .eq("key", DB_KEY)
+      .maybeSingle();
+    if (error) throw error;
+    if (data && data.value) { MEM = data.value; return data.value; }
+  } catch (e) { console.error("loadDB", e); }
   return MEM;
 }
+
 async function saveDB(db) {
   MEM = db;
-  if (hasStore) { try { await window.storage.set(DB_KEY, JSON.stringify(db)); } catch (e) {} }
+  try {
+    const { error } = await supabase
+      .from("app_state")
+      .upsert({ key: DB_KEY, value: db, updated_at: new Date().toISOString() });
+    if (error) throw error;
+  } catch (e) { console.error("saveDB", e); }
 }
-
 /* ---------- Helpers ---------- */
 function ultimoResultado(db, pilotoId) {
   const rs = db.resultados
