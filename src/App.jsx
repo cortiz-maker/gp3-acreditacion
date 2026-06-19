@@ -481,8 +481,8 @@ async function saveDB(db) {
       .from("app_state")
       .upsert({ key: DB_KEY, value: db, updated_at: new Date().toISOString() });
     if (error) throw error;
-    return true;
-  } catch (e) { console.error("saveDB", e); return false; }
+    return { ok: true };
+  } catch (e) { console.error("saveDB", e); return { ok: false, error: e }; }
 }
 
 /* ---------- Escrituras atómicas (RPC server-side, evita pisarse entre usuarios) ---------- */
@@ -526,13 +526,14 @@ export default function App() {
       try {
         if (serverWrite) {
           try { await serverWrite(); }
-          catch (e) { console.error("RPC falló; guardo documento completo", e); const ok = await saveDB(next); if (!ok) throw e; }
+          catch (e) { console.error("RPC falló; guardo documento completo", e); const r = await saveDB(next); if (!r.ok) throw (r.error || e); }
         } else {
-          const ok = await saveDB(next); if (!ok) throw new Error("saveDB falló");
+          const r = await saveDB(next); if (!r.ok) throw (r.error || new Error("saveDB falló"));
         }
         dirty.current = false; setSaveErr(null);
       } catch (e) {
-        setSaveErr("No se pudo guardar el último cambio. Revisa permisos/conexión en Supabase e inténtalo de nuevo.");
+        const msg = e?.message || e?.error_description || (typeof e === "string" ? e : JSON.stringify(e));
+        setSaveErr("No se pudo guardar: " + msg + (e?.code ? " [" + e.code + "]" : ""));
       }
     })();
   };
