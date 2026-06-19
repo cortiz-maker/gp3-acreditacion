@@ -964,6 +964,11 @@ function AcreditacionFlow({ db, persist }) {
     return nombreCompleto(p).toLowerCase().includes(t) || String(p.dorsal) === t || (p.dni || "").toLowerCase().replace(/[.\s]/g, "").includes(t.replace(/[.\s]/g, ""));
   }).sort((a, b) => prioridad(a) - prioridad(b) || (Number(a.dorsal) || 999) - (Number(b.dorsal) || 999));
   const nPre = pilotosFecha.filter((p) => acrDe(p.id)?.estado === "pre-acreditado").length;
+  const nTotal = pilotosFecha.length;
+  const nAcr = pilotosFecha.filter((p) => acrDe(p.id)?.estado === "acreditado").length;
+  const nPorAcr = nTotal - nAcr;
+  const nSinReg = pilotosFecha.filter((p) => !acrDe(p.id)).length;
+  const pctAcr = nTotal ? Math.round((nAcr / nTotal) * 100) : 0;
 
   const toggleFecha = (fid) => {
     const cur = db.fechasEstado?.[fid] === "en_curso";
@@ -1019,6 +1024,20 @@ function AcreditacionFlow({ db, persist }) {
       </div>
 
       {db.fechasEstado?.[fechaId] !== "en_curso" && <div className="inline-warn"><Clock size={15} /> Esta fecha no está en curso. Inícialas en el mantenedor para habilitar la pre-acreditación de los pilotos.</div>}
+
+      <div className="resumen-card">
+        <div className="resumen-head">
+          <span className="resumen-title">Resumen · {serie} · {fecha?.n}</span>
+          <span className="resumen-pct">{nAcr}/{nTotal} acreditados · {pctAcr}%</span>
+        </div>
+        <div className="resumen-bar"><div className="resumen-fill" style={{ width: pctAcr + "%" }} /></div>
+        <div className="resumen-stats">
+          <div className="rstat ok"><b>{nAcr}</b><span>Acreditados</span></div>
+          <div className="rstat pend"><b>{nPorAcr}</b><span>Por acreditar</span></div>
+          <div className="rstat pre"><b>{nPre}</b><span>Pre-acreditados</span></div>
+          <div className="rstat none"><b>{nSinReg}</b><span>Sin registro</span></div>
+        </div>
+      </div>
 
       {nPre > 0 && <div className="info-bar"><ClipboardCheck size={15} /> {nPre} piloto(s) pre-acreditado(s) en esta fecha — emite e imprime su pase para firmar, timbrar y entregar a CAMOD.</div>}
 
@@ -2094,6 +2113,21 @@ select.inp{appearance:auto}
 .search.org{margin-top:14px;flex:none}
 .search input{border:0;outline:0;padding:11px 0;width:100%;font-size:.95rem;background:transparent}
 .staff-list{display:flex;flex-direction:column;gap:8px}
+.resumen-card{background:#fff;border:1px solid #E6E9F0;border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.resumen-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.resumen-title{font-weight:700;font-size:.95rem;color:#1B2540}
+.resumen-pct{font-size:.82rem;color:#5A6478;font-weight:600}
+.resumen-bar{height:8px;background:#EEF1F6;border-radius:6px;overflow:hidden;margin-bottom:12px}
+.resumen-fill{height:100%;background:#16A34A;border-radius:6px;transition:width .3s}
+.resumen-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.rstat{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 4px;border-radius:8px;background:#F7F8FB}
+.rstat b{font-size:1.4rem;line-height:1.1}
+.rstat span{font-size:.72rem;color:#5A6478;margin-top:2px;text-align:center}
+.rstat.ok b{color:#16A34A}
+.rstat.pend b{color:#B45309}
+.rstat.pre b{color:#9A6A00}
+.rstat.none b{color:#64748B}
+@media(max-width:520px){.resumen-stats{grid-template-columns:repeat(2,1fr)}}
 .row-obs{display:block;margin-top:3px;font-size:.78rem;color:#9A6A00;background:#FFF3B0;border-radius:6px;padding:3px 8px;line-height:1.3}
 .save-err-bar{display:flex;align-items:center;gap:8px;background:#FDECEC;color:#B42318;border:1px solid #F4B5B0;border-radius:8px;padding:8px 12px;margin:10px 16px;font-size:.85rem}
 .save-err-bar button{margin-left:auto;background:none;border:none;color:#B42318;cursor:pointer;font-size:1rem;line-height:1}
