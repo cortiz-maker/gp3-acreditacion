@@ -484,6 +484,13 @@ async function saveDB(db) {
   } catch (e) { console.error("saveDB", e); }
 }
 
+/* ---------- Escrituras atómicas (RPC server-side, evita pisarse entre usuarios) ---------- */
+async function rpcPiloto(p)            { const { error } = await supabase.rpc("gp3_upsert_piloto", { p }); if (error) throw error; }
+async function rpcAcr(a)               { const { error } = await supabase.rpc("gp3_upsert_acreditacion", { a }); if (error) throw error; }
+async function rpcAbono(ab)            { const { error } = await supabase.rpc("gp3_add_abono", { ab }); if (error) throw error; }
+async function rpcFecha(fid, est)      { const { error } = await supabase.rpc("gp3_set_fecha_estado", { fid, est }); if (error) throw error; }
+async function rpcResultados(resultados, log) { const { error } = await supabase.rpc("gp3_set_resultados", { resultados, log }); if (error) throw error; }
+
 /* ---------- Helpers ---------- */
 function ultimoResultado(db, pilotoId) {
   const rs = db.resultados
@@ -509,7 +516,20 @@ export default function App() {
       setDb(d);
     })();
   }, []);
-  const persist = (next) => { setDb(next); saveDB(next); };
+  const persist = (next, serverWrite) => {
+    setDb(next);
+    if (serverWrite) { Promise.resolve().then(serverWrite).catch((e) => console.error("write", e)); }
+    else { saveDB(next); }
+  };
+
+  // Refresco en vivo: trae cambios de otros usuarios (cada 12s y al volver a la pestaña)
+  useEffect(() => {
+    const refresh = async () => { const d = await loadDB(); if (d && d.v === 5) setDb(d); };
+    const iv = setInterval(refresh, 12000);
+    const onFocus = () => refresh();
+    window.addEventListener("focus", onFocus);
+    return () => { clearInterval(iv); window.removeEventListener("focus", onFocus); };
+  }, []);
 
   if (!db) return <Splash />;
   return (
@@ -672,8 +692,10 @@ function PilotoHeader({ piloto }) {
 
 /* Ficha CAMOD — solo lectura para el piloto + confirmar / rechazar */
 function PilotoFicha({ db, persist, piloto }) {
-  const setEstado = (estadoFicha) =>
-    persist({ ...db, pilotos: db.pilotos.map((p) => (p.id === piloto.id ? { ...p, estadoFicha } : p)) });
+  const setEstado = (estadoFicha) => {
+    const np = { ...piloto, estadoFicha };
+    persist({ ...db, pilotos: db.pilotos.map((p) => (p.id === piloto.id ? np : p)) }, () => rpcPiloto(np));
+  };
 
   return (
     <div className="panel">
@@ -722,7 +744,7 @@ function PilotoPreacred({ db, persist, piloto }) {
       snapshot: snapshotDe(piloto),
     };
     const otras = db.acreditaciones.filter((a) => a.id !== reg.id);
-    persist({ ...db, acreditaciones: [...otras, reg] });
+    persist({ ...db, acreditaciones: [...otras, reg] }, () => rpcAcr(reg));
     setSel(null);
   };
 
@@ -923,25 +945,29 @@ function AcreditacionFlow({ db, persist }) {
 
   const toggleFecha = (fid) => {
     const cur = db.fechasEstado?.[fid] === "en_curso";
-    persist({ ...db, fechasEstado: { ...db.fechasEstado, [fid]: cur ? "cerrada" : "en_curso" } });
+    const est = cur ? "cerrada" : "en_curso";
+    persist({ ...db, fechasEstado: { ...db.fechasEstado, [fid]: est } }, () => rpcFecha(fid, est));
   };
   const emitir = (piloto, cobro) => {
     const ex = acrDe(piloto.id);
     const folio = ex?.folio || folioNuevo(db);
     const reg = { id: ex?.id || `acr-${piloto.id}-${fechaId}`, pilotoId: piloto.id, fechaId, estado: "acreditado", folio, validado: new Date().toISOString(), acreditador: db.acreditador, creado: ex?.creado || new Date().toISOString(), snapshot: ex?.snapshot || snapshotDe(piloto), cobro: cobro || ex?.cobro || null };
     let abonos = db.abonos || [];
+    let nuevoAbono = null;
     if (cobro?.modo === "abono" && (cobro.abono || 0) > 0 && ex?.estado !== "acreditado") {
-      abonos = [...abonos, { id: `ab-${Date.now()}`, pilotoId: piloto.id, fechaId, monto: cobro.abono, moneda: cobro.moneda, medioPago: cobro.medioPago, ts: new Date().toISOString() }];
+      nuevoAbono = { id: `ab-${Date.now()}`, pilotoId: piloto.id, fechaId, monto: cobro.abono, moneda: cobro.moneda, medioPago: cobro.medioPago, ts: new Date().toISOString() };
+      abonos = [...abonos, nuevoAbono];
     }
     const otras = db.acreditaciones.filter((a) => a.id !== reg.id);
-    persist({ ...db, acreditaciones: [...otras, reg], abonos });
+    persist({ ...db, acreditaciones: [...otras, reg], abonos }, async () => { await rpcAcr(reg); if (nuevoAbono) await rpcAbono(nuevoAbono); });
     setCobrando(null);
     setPase({ reg, piloto, fecha });
   };
   const guardarEdicion = (data) => {
-    persist({ ...db, pilotos: db.pilotos.map((p) => (p.id === data.id ? { ...data, estadoFicha: "confirmada" } : p)) });
+    const np = { ...data, estadoFicha: "confirmada" };
+    persist({ ...db, pilotos: db.pilotos.map((p) => (p.id === data.id ? np : p)) }, () => rpcPiloto(np));
     setEditPiloto(null);
-    setCobrando({ ...data, estadoFicha: "confirmada" }); // Paso 2: cobro / abono
+    setCobrando(np); // Paso 2: cobro / abono
   };
 
   if (pase) return <PaseView {...pase} onBack={() => setPase(null)} />;
@@ -1328,8 +1354,9 @@ function OrgPilotos({ db, persist }) {
   const nuevo = () => { setEditId("__new__"); setF(vacio); };
   const guardar = () => {
     if (!f.nombres || !f.dni) return;
-    const pilotos = editId === "__new__" ? [...db.pilotos, { ...f, id: `p${Date.now()}` }] : db.pilotos.map((p) => (p.id === editId ? f : p));
-    persist({ ...db, pilotos }); setEditId(null);
+    const np = editId === "__new__" ? { ...f, id: `p${Date.now()}` } : f;
+    const pilotos = editId === "__new__" ? [...db.pilotos, np] : db.pilotos.map((p) => (p.id === editId ? np : p));
+    persist({ ...db, pilotos }, () => rpcPiloto(np)); setEditId(null);
   };
 
   const exportarExcel = () => {
@@ -1532,7 +1559,7 @@ function OrgPuntajes({ db, persist, onLock }) {
       motivo: e.motivo.trim(),
     };
     const resultados = db.resultados.map((x) => (x.id === r.id ? { ...x, tanda: e.tanda, pos: nPos, puntos: nPun } : x));
-    persist({ ...db, resultados, cambiosLog: [entrada, ...(db.cambiosLog || [])] });
+    persist({ ...db, resultados, cambiosLog: [entrada, ...(db.cambiosLog || [])] }, () => rpcResultados(resultados, entrada));
     setEditing(null);
   };
 
