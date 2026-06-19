@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Flag, ChevronRight, User, Users, Calendar, Trophy, ClipboardCheck,
   Printer, Search, Plus, Check, X, ShieldCheck, Bike, MapPin,
@@ -481,7 +481,8 @@ async function saveDB(db) {
       .from("app_state")
       .upsert({ key: DB_KEY, value: db, updated_at: new Date().toISOString() });
     if (error) throw error;
-  } catch (e) { console.error("saveDB", e); }
+    return true;
+  } catch (e) { console.error("saveDB", e); return false; }
 }
 
 /* ---------- Escrituras atómicas (RPC server-side, evita pisarse entre usuarios) ---------- */
@@ -508,6 +509,8 @@ const esArg = (p) => p.pais === "Argentina";
 export default function App() {
   const [db, setDb] = useState(null);
   const [rol, setRol] = useState(null);
+  const [saveErr, setSaveErr] = useState(null);
+  const dirty = useRef(false);
 
   useEffect(() => {
     (async () => {
@@ -518,13 +521,25 @@ export default function App() {
   }, []);
   const persist = (next, serverWrite) => {
     setDb(next);
-    if (serverWrite) { Promise.resolve().then(serverWrite).catch((e) => console.error("write", e)); }
-    else { saveDB(next); }
+    dirty.current = true;
+    (async () => {
+      try {
+        if (serverWrite) {
+          try { await serverWrite(); }
+          catch (e) { console.error("RPC falló; guardo documento completo", e); const ok = await saveDB(next); if (!ok) throw e; }
+        } else {
+          const ok = await saveDB(next); if (!ok) throw new Error("saveDB falló");
+        }
+        dirty.current = false; setSaveErr(null);
+      } catch (e) {
+        setSaveErr("No se pudo guardar el último cambio. Revisa permisos/conexión en Supabase e inténtalo de nuevo.");
+      }
+    })();
   };
 
   // Refresco en vivo: trae cambios de otros usuarios (cada 12s y al volver a la pestaña)
   useEffect(() => {
-    const refresh = async () => { const d = await loadDB(); if (d && d.v === 5) setDb(d); };
+    const refresh = async () => { if (dirty.current) return; const d = await loadDB(); if (d && d.v === 5 && !dirty.current) setDb(d); };
     const iv = setInterval(refresh, 12000);
     const onFocus = () => refresh();
     window.addEventListener("focus", onFocus);
@@ -536,6 +551,12 @@ export default function App() {
     <div className="gp3-root">
       <StyleSheet />
       <TopBar rol={rol} onHome={() => setRol(null)} />
+      {saveErr && (
+        <div className="save-err-bar">
+          <AlertTriangle size={16} /><span>{saveErr}</span>
+          <button onClick={() => setSaveErr(null)} aria-label="Cerrar">✕</button>
+        </div>
+      )}
       <main className="gp3-main">
         {!rol && <Landing onPick={setRol} />}
         {rol === "acreditacion" && <AcreditacionFlow db={db} persist={persist} />}
@@ -2073,6 +2094,8 @@ select.inp{appearance:auto}
 .search input{border:0;outline:0;padding:11px 0;width:100%;font-size:.95rem;background:transparent}
 .staff-list{display:flex;flex-direction:column;gap:8px}
 .row-obs{display:block;margin-top:3px;font-size:.78rem;color:#9A6A00;background:#FFF3B0;border-radius:6px;padding:3px 8px;line-height:1.3}
+.save-err-bar{display:flex;align-items:center;gap:8px;background:#FDECEC;color:#B42318;border:1px solid #F4B5B0;border-radius:8px;padding:8px 12px;margin:10px 16px;font-size:.85rem}
+.save-err-bar button{margin-left:auto;background:none;border:none;color:#B42318;cursor:pointer;font-size:1rem;line-height:1}
 .staff-row{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:11px 14px}
 .staff-row.flagged{border-color:#F3C2C2;background:#FFFafa}
 .row-dorsal{font-family:var(--disp);font-weight:800;font-size:1.5rem;background:var(--carbon);color:#fff;min-width:54px;height:48px;display:grid;place-items:center;border-radius:9px}
