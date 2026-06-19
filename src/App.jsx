@@ -3,7 +3,7 @@ import {
   Flag, ChevronRight, User, Users, Calendar, Trophy, ClipboardCheck,
   Printer, Search, Plus, Check, X, ShieldCheck, Bike, MapPin,
   ArrowLeft, Pencil, BadgeCheck, Clock, LogOut, Save, Lock, Unlock,
-  AlertTriangle, Power, Map, Download,
+  AlertTriangle, Power, Map, Download, Trash2,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import * as XLSX from "xlsx";
@@ -509,6 +509,7 @@ async function rpcAcr(a)               { const { error } = await supabase.rpc("g
 async function rpcAbono(ab)            { const { error } = await supabase.rpc("gp3_add_abono", { ab }); if (error) throw error; }
 async function rpcFecha(fid, est)      { const { error } = await supabase.rpc("gp3_set_fecha_estado", { fid, est }); if (error) throw error; }
 async function rpcResultados(resultados, log) { const { error } = await supabase.rpc("gp3_set_resultados", { resultados, log }); if (error) throw error; }
+async function rpcBorrarPiloto(pid)     { const { error } = await supabase.rpc("gp3_delete_piloto", { pid }); if (error) throw error; }
 
 /* ---------- Helpers ---------- */
 function ultimoResultado(db, pilotoId) {
@@ -1413,16 +1414,28 @@ function OrgPilotos({ db, persist }) {
   const [q, setQ] = useState("");
   const [campAbierto, setCampAbierto] = useState(null);
   const [verPerfil, setVerPerfil] = useState(null);
+  const [confDel, setConfDel] = useState(false);
   const vacio = { id: "", dorsal: "", categoria: CATEGORIAS[0], campeonato: CAMPEONATOS[1], nombres: "", apellidos: "", dni: "", fechaNacimiento: "", pais: "Chile", provincia: "", localidad: "", domicilio: "", telefono: "", nombreAcompanante: "", telefonoAcompanante: "", mail: "", marcaMoto: "", modeloMoto: "", equipo: "", licencia: "", estadoFicha: "pendiente", foto: "" };
   const [f, setF] = useState(vacio);
   const campo = (k, v) => setF((s) => aplicarAuto(s, k, v));
-  const editar = (p) => { setEditId(p.id); setF(p); };
-  const nuevo = () => { setEditId("__new__"); setF(vacio); };
+  const editar = (p) => { setEditId(p.id); setF(p); setConfDel(false); };
+  const nuevo = () => { setEditId("__new__"); setF(vacio); setConfDel(false); };
   const guardar = () => {
     if (!f.nombres || !f.dni) return;
     const np = editId === "__new__" ? { ...f, id: `p${Date.now()}` } : f;
     const pilotos = editId === "__new__" ? [...db.pilotos, np] : db.pilotos.map((p) => (p.id === editId ? np : p));
     persist({ ...db, pilotos }, () => rpcPiloto(np)); setEditId(null);
+  };
+  const borrar = () => {
+    const pid = editId;
+    const next = {
+      ...db,
+      pilotos: db.pilotos.filter((p) => p.id !== pid),
+      acreditaciones: (db.acreditaciones || []).filter((a) => a.pilotoId !== pid),
+      abonos: (db.abonos || []).filter((b) => b.pilotoId !== pid),
+    };
+    persist(next, () => rpcBorrarPiloto(pid));
+    setEditId(null); setConfDel(false);
   };
 
   const exportarExcel = () => {
@@ -1582,6 +1595,12 @@ function OrgPilotos({ db, persist }) {
           <h4>{editId === "__new__" ? "Nuevo piloto" : "Editar piloto"}</h4>
           <FichaFields data={f} edit onChange={campo} />
           <div className="panel-actions">
+            {editId !== "__new__" && (confDel
+              ? <><span className="del-warn"><AlertTriangle size={14} /> ¿Borrar a {nombreCompleto(f)} de forma permanente?</span>
+                  <button className="btn-danger" onClick={borrar}><Trash2 size={14} /> Sí, borrar</button>
+                  <button className="btn-ghost" onClick={() => setConfDel(false)}>No</button></>
+              : <button className="btn-danger-ghost" onClick={() => setConfDel(true)}><Trash2 size={14} /> Borrar piloto</button>)}
+            <span className="spacer" />
             <button className="btn-ghost" onClick={() => setEditId(null)}><X size={14} /> Cancelar</button>
             <button className="btn-primary" onClick={guardar}><Save size={15} /> Guardar ficha</button>
           </div>
@@ -2087,6 +2106,12 @@ select.inp{appearance:auto}
 .pase-cobro-items{display:flex;flex-direction:column;gap:2px;text-align:right}
 .pase-cobro-items span{font-size:.72rem;color:#aeb3bf;font-family:var(--mono)}
 .panel-actions{display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap}
+.panel-actions .spacer{flex:1 1 auto}
+.btn-danger{display:inline-flex;align-items:center;gap:6px;background:#DC2626;color:#fff;border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font-weight:600;font-size:.88rem}
+.btn-danger:hover{background:#B91C1C}
+.btn-danger-ghost{display:inline-flex;align-items:center;gap:6px;background:#fff;color:#DC2626;border:1px solid #F4B5B0;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:.88rem}
+.btn-danger-ghost:hover{background:#FDECEC}
+.del-warn{display:inline-flex;align-items:center;gap:6px;color:#B42318;font-size:.85rem;font-weight:600}
 
 .reject-msg{display:flex;gap:14px;align-items:flex-start;background:#FFF7F6;border:1px solid #F3C2C2;border-radius:12px;padding:16px;margin-top:8px}
 .reject-msg svg{color:var(--red);flex-shrink:0;margin-top:2px}
