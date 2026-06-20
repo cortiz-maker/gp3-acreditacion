@@ -178,7 +178,7 @@ function modoDe(campeonato) {
 function monedasDe(campeonato) {
   if (!campeonato) return ["CLP"];
   if (campeonato.includes("Binacional")) return ["ARS", "CLP", "USD"]; // único multimoneda
-  if (campeonato.startsWith("CAV")) return ["ARS"];
+  if (campeonato.startsWith("CAV")) return ["ARS", "USD"];
   if (campeonato.startsWith("Moto 4")) return ["USD"];                  // Moto 4 solo USD
   return ["CLP"];                                                       // CCV, Gp3 Junior
 }
@@ -1007,7 +1007,7 @@ function AcreditacionFlow({ db, persist }) {
     const reg = { id: ex?.id || `acr-${piloto.id}-${fechaId}`, pilotoId: piloto.id, fechaId, estado: "acreditado", folio, validado: new Date().toISOString(), acreditador: db.acreditador, creado: ex?.creado || new Date().toISOString(), snapshot: ex?.snapshot || snapshotDe(piloto), cobro: cobro || ex?.cobro || null };
     let abonos = db.abonos || [];
     let nuevoAbono = null;
-    if (cobro?.modo === "abono" && (cobro.abono || 0) > 0 && ex?.estado !== "acreditado") {
+    if (cobro?.modo === "abono" && !cobro.convenio && (cobro.abono || 0) > 0 && ex?.estado !== "acreditado") {
       nuevoAbono = { id: `ab-${Date.now()}`, pilotoId: piloto.id, fechaId, monto: cobro.abono, moneda: cobro.moneda, medioPago: cobro.medioPago, ts: new Date().toISOString() };
       abonos = [...abonos, nuevoAbono];
     }
@@ -1164,6 +1164,8 @@ function CobroModal({ db, piloto, fecha, onClose, onConfirm }) {
   const [cat2, setCat2] = useState(otras[0] || "");
   const [m2, setM2] = useState("");
   const [abono, setAbono] = useState("");
+  const [efectivo, setEfectivo] = useState("");
+  const [convenio, setConvenio] = useState(false);
 
   const cambiarMoneda = (mo) => { setMoneda(mo); if (modo === "fecha") { setM1(sug(piloto.categoria, mo)); if (seg) setM2(sug(cat2, mo, 0.5)); } };
   const toggleSeg = () => { const n = !seg; setSeg(n); if (n && modo === "fecha") setM2(sug(cat2, moneda, 0.5)); };
@@ -1173,15 +1175,22 @@ function CobroModal({ db, piloto, fecha, onClose, onConfirm }) {
   const anual = modo === "abono" ? sumaItems : 0;
   const cobroAhora = modo === "abono" ? (Number(abono) || 0) : sumaItems;
   const saldo = anual - abonadoPrevio - (Number(abono) || 0);
-  const valido = !bloqueada && cobroAhora > 0 && !!med;
+  const efectivoNum = Number(efectivo) || 0;
+  const vuelto = efectivoNum - cobroAhora;
+  const valido = bloqueada ? false : (convenio ? true : (cobroAhora > 0 && !!med));
 
   const confirmar = () => {
     if (!valido) return;
+    if (convenio) {
+      onConfirm({ modo, moneda, convenio: true, medioPago: "Convenio Organización", items: [], anual: modo === "abono" ? anual : undefined, abono: 0, abonadoPrevio, saldo: 0, total: 0, efectivo: 0, vuelto: 0 });
+      return;
+    }
     const items = [{ categoria: piloto.categoria, factor: 1, monto: Number(m1) || 0 }];
     if (seg && cat2) items.push({ categoria: cat2, factor: 0.5, monto: Number(m2) || 0 });
+    const base = { modo, moneda, medioPago: med, items, efectivo: efectivoNum, vuelto };
     const cobro = modo === "abono"
-      ? { modo, moneda, medioPago: med, items, anual, abono: Number(abono) || 0, abonadoPrevio, saldo, total: Number(abono) || 0 }
-      : { modo, moneda, medioPago: med, items, total: sumaItems };
+      ? { ...base, anual, abono: Number(abono) || 0, abonadoPrevio, saldo, total: Number(abono) || 0 }
+      : { ...base, total: sumaItems };
     onConfirm(cobro);
   };
 
@@ -1202,6 +1211,14 @@ function CobroModal({ db, piloto, fecha, onClose, onConfirm }) {
           </div>
         ) : (
           <>
+            <label className="convenio-chk">
+              <input type="checkbox" checked={convenio} onChange={(e) => setConvenio(e.target.checked)} />
+              <span>Convenio Organización — acreditar sin cobro</span>
+            </label>
+            {convenio ? (
+              <div className="convenio-note"><ShieldCheck size={18} /><div><b>Acreditación por convenio</b><p>No se registrará cobro ni saldo para esta categoría. Se emitirá el pase sin cobranza asociada.</p></div></div>
+            ) : (
+              <>
             <div className="cobro-line">
               <div className="cl-cat"><span className="cl-tag">{modo === "abono" ? "Valor anual · 1ª categoría" : "1ª categoría"}</span><b>{piloto.categoria}</b></div>
               <div className="cl-input"><span className="cur">{moneda}</span><input type="number" value={m1} placeholder="0" onChange={(e) => setM1(e.target.value)} /></div>
@@ -1238,13 +1255,22 @@ function CobroModal({ db, piloto, fecha, onClose, onConfirm }) {
               {!piloto.campeonato.includes("CCV") && <span className="muted small">Tarjeta no disponible para {piloto.campeonato.split(" - ")[0]}.</span>}
             </div>
 
+            <div className="cobro-line efectivo-input">
+              <div className="cl-cat"><span className="cl-tag">Efectivo recibido</span></div>
+              <div className="cl-input"><span className="cur">{moneda}</span><input type="number" value={efectivo} placeholder="0" onChange={(e) => setEfectivo(e.target.value)} /></div>
+            </div>
+            {efectivoNum > 0 && (
+              <div className={`abono-row ${vuelto < 0 ? "falta" : "vuelto"}`}><span>{vuelto >= 0 ? "Vuelto a entregar" : "Falta por pagar"}</span><b>{fmtMoneda(Math.abs(vuelto), moneda)}</b></div>
+            )}
             <div className="cobro-total"><span>{modo === "abono" ? "Abono a cobrar ahora" : "Total a cobrar"}</span><b>{fmtMoneda(cobroAhora, moneda)}</b></div>
+              </>
+            )}
           </>
         )}
 
         <div className="panel-actions">
           <button className="btn-ghost" onClick={onClose}><X size={14} /> Cancelar</button>
-          <button className="btn-primary" onClick={confirmar} disabled={!valido}><Printer size={15} /> {modo === "abono" ? "Registrar abono y emitir" : "Cobrar y emitir pase"}</button>
+          <button className="btn-primary" onClick={confirmar} disabled={!valido}><Printer size={15} /> {convenio ? "Acreditar por convenio" : (modo === "abono" ? "Registrar abono y emitir" : "Cobrar y emitir pase")}</button>
         </div>
       </div>
     </div>
@@ -2109,6 +2135,12 @@ select.inp{appearance:auto}
 .pase-cobro-items span{font-size:.72rem;color:#aeb3bf;font-family:var(--mono)}
 .panel-actions{display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap}
 .panel-actions .spacer{flex:1 1 auto}
+.convenio-chk{display:flex;align-items:center;gap:8px;margin:0 0 10px;padding:9px 11px;background:#F5F3FF;border:1px solid #DDD6FE;border-radius:8px;cursor:pointer;font-size:.9rem;font-weight:600;color:#5B21B6}
+.convenio-chk input{width:16px;height:16px;cursor:pointer;accent-color:#7C3AED}
+.convenio-note{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;background:#F5F3FF;border:1px solid #DDD6FE;border-radius:10px;color:#5B21B6;margin-bottom:6px}
+.convenio-note p{margin:2px 0 0;font-size:.85rem;color:#6D28D9;font-weight:400}
+.abono-row.vuelto b{color:#067647}
+.abono-row.falta b{color:#B42318}
 .btn-danger{display:inline-flex;align-items:center;gap:6px;background:#DC2626;color:#fff;border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font-weight:600;font-size:.88rem}
 .btn-danger:hover{background:#B91C1C}
 .btn-danger-ghost{display:inline-flex;align-items:center;gap:6px;background:#fff;color:#DC2626;border:1px solid #F4B5B0;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:.88rem}
