@@ -591,6 +591,7 @@ function canonizar(valor, existentes) {
   return v;                                    // nuevo: se agrega tal cual
 }
 const marcasDe = (db) => Array.from(new Set((db?.pilotos || []).map((p) => (p.marcaMoto || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "es"));
+const equiposDe = (db) => Array.from(new Set((db?.pilotos || []).map((p) => (p.equipo || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "es"));
 const modelosDe = (db, marca) => {
   const mk = normKey(marca);
   const rows = (db?.pilotos || []).filter((p) => !mk || normKey(p.marcaMoto) === mk);
@@ -1090,7 +1091,8 @@ function AcreditacionFlow({ db, persist }) {
   const guardarEdicion = (data) => {
     const marcaC = canonizar(data.marcaMoto, marcasDe(db));
     const modeloC = canonizar(data.modeloMoto, modelosDe(db, marcaC));
-    const np = { ...data, marcaMoto: marcaC, modeloMoto: modeloC, estadoFicha: "confirmada" };
+    const equipoC = canonizar(data.equipo, equiposDe(db));
+    const np = { ...data, marcaMoto: marcaC, modeloMoto: modeloC, equipo: equipoC, estadoFicha: "confirmada" };
     persist({ ...db, pilotos: db.pilotos.map((p) => (p.id === data.id ? np : p)) }, () => rpcPiloto(np));
     setEditPiloto(null);
     setCobrando(np); // Paso 2: cobro / abono
@@ -1525,7 +1527,8 @@ function OrgPilotos({ db, persist }) {
     if (!f.nombres || !f.dni) return;
     const marcaC = canonizar(f.marcaMoto, marcasDe(db));
     const modeloC = canonizar(f.modeloMoto, modelosDe(db, marcaC));
-    const base = { ...f, marcaMoto: marcaC, modeloMoto: modeloC };
+    const equipoC = canonizar(f.equipo, equiposDe(db));
+    const base = { ...f, marcaMoto: marcaC, modeloMoto: modeloC, equipo: equipoC };
     const np = editId === "__new__" ? { ...base, id: `p${Date.now()}` } : base;
     const pilotos = editId === "__new__" ? [...db.pilotos, np] : db.pilotos.map((p) => (p.id === editId ? np : p));
     persist({ ...db, pilotos }, () => rpcPiloto(np)); setEditId(null);
@@ -2006,6 +2009,8 @@ function FichaFields({ data, edit, onChange, db }) {
                   ? <><input className="inp" list="moto-marcas" value={val ?? ""} placeholder="Selecciona o escribe la marca" onChange={(e) => onChange("marcaMoto", e.target.value)} /><datalist id="moto-marcas">{marcasDe(db).map((o) => <option key={o} value={o} />)}</datalist></>
                   : f.k === "modeloMoto"
                   ? <><input className="inp" list="moto-modelos" value={val ?? ""} placeholder={data.marcaMoto ? "Selecciona o escribe el modelo" : "Elige primero la marca"} onChange={(e) => onChange("modeloMoto", e.target.value)} /><datalist id="moto-modelos">{modelosDe(db, data.marcaMoto).map((o) => <option key={o} value={o} />)}</datalist></>
+                  : f.k === "equipo"
+                  ? <><input className="inp" list="moto-equipos" value={val ?? ""} placeholder="Selecciona o escribe el equipo" onChange={(e) => onChange("equipo", e.target.value)} /><datalist id="moto-equipos">{equiposDe(db).map((o) => <option key={o} value={o} />)}</datalist></>
                   : f.type === "select"
                   ? <select className="inp" value={val ?? ""} onChange={(e) => onChange(f.k, e.target.value)}>{f.opts.map((o) => <option key={o} value={o}>{o}</option>)}</select>
                   : <input className="inp" type={f.type === "date" ? "date" : "text"} value={val ?? ""} onChange={(e) => onChange(f.k, e.target.value)} />}
