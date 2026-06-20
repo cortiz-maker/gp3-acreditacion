@@ -605,6 +605,7 @@ async function rpcAcr(a)               { const { error } = await supabase.rpc("g
 async function rpcAbono(ab)            { const { error } = await supabase.rpc("gp3_add_abono", { ab }); if (error) throw error; }
 async function rpcFecha(fid, est)      { const { error } = await supabase.rpc("gp3_set_fecha_estado", { fid, est }); if (error) throw error; }
 async function rpcFechasImg(imgs)       { const { error } = await supabase.rpc("gp3_set_fechas_img", { imgs }); if (error) throw error; }
+async function rpcSolicitudes(sols)     { const { error } = await supabase.rpc("gp3_set_solicitudes", { sols }); if (error) throw error; }
 async function rpcResultados(resultados, log) { const { error } = await supabase.rpc("gp3_set_resultados", { resultados, log }); if (error) throw error; }
 async function rpcBorrarPiloto(pid)     { const { error } = await supabase.rpc("gp3_delete_piloto", { pid }); if (error) throw error; }
 
@@ -620,6 +621,21 @@ function folioNuevo(db) {
   return `GP3-2026-${String(n).padStart(4, "0")}`;
 }
 const esArg = (p) => p.pais === "Argentina";
+function labelCampo(k) { const f = FICHA_FIELDS.find((x) => x && x.k === k); return (f && f.label) || k; }
+/* Ventana de pre-acreditación: abre el día ANTES de la fecha, cierra el sábado del evento */
+function ventanaPreacred(f) {
+  if (!f || !f.ini) return null;
+  const ini = new Date(f.ini + "T00:00:00");
+  const open = new Date(ini); open.setDate(open.getDate() - 1); open.setHours(0, 0, 0, 0);
+  const sat = new Date(ini); sat.setDate(sat.getDate() + ((6 - sat.getDay() + 7) % 7)); sat.setHours(23, 59, 59, 999);
+  return { open, close: sat };
+}
+function preacredAbierta(f, now = new Date()) {
+  const v = ventanaPreacred(f); if (!v) return false;
+  return now >= v.open && now <= v.close;
+}
+const fmtFechaCorta = (d) => (d ? d.toLocaleDateString("es-CL", { day: "2-digit", month: "long" }) : "");
+function txtVentana(f) { const v = ventanaPreacred(f); if (!v) return ""; return `Se habilita el ${fmtFechaCorta(v.open)} y cierra el sábado ${fmtFechaCorta(v.close)}.`; }
 
 /* ---- Auto-gestión de Marca/Modelo de moto: lista desde la base + normalización ---- */
 const normKey = (x) => (x || "").toString().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
@@ -658,9 +674,11 @@ const modelosDe = (db, marca) => {
 };
 
 /* ============================================================ */
+const PILOTO_LINK = (() => { try { const sp = new URLSearchParams(window.location.search); return sp.has("piloto") || (window.location.hash || "").toLowerCase().includes("piloto"); } catch (e) { return false; } })();
+
 export default function App() {
   const [db, setDb] = useState(null);
-  const [rol, setRol] = useState(null);
+  const [rol, setRol] = useState(PILOTO_LINK ? "piloto" : null);
   const [saveErr, setSaveErr] = useState(null);
   const dirty = useRef(false);
 
@@ -703,7 +721,7 @@ export default function App() {
   return (
     <div className="gp3-root">
       <StyleSheet />
-      <TopBar rol={rol} onHome={() => setRol(null)} />
+      <TopBar rol={rol} onHome={() => { if (PILOTO_LINK) window.location.reload(); else setRol(null); }} />
       {saveErr && (
         <div className="save-err-bar">
           <AlertTriangle size={16} /><span>{saveErr}</span>
@@ -714,6 +732,7 @@ export default function App() {
         {!rol && <Landing onPick={setRol} />}
         {rol === "acreditacion" && <AcreditacionFlow db={db} persist={persist} />}
         {rol === "org" && <OrgFlow db={db} persist={persist} />}
+        {rol === "piloto" && <PilotoFlow db={db} persist={persist} />}
       </main>
     </div>
   );
@@ -789,15 +808,18 @@ function Landing({ onPick }) {
 function PilotoFlow({ db, persist }) {
   const [pid, setPid] = useState(null);
   const [doc, setDoc] = useState("");
+  const [pin, setPin] = useState("");
   const [err, setErr] = useState("");
   const [tab, setTab] = useState("ficha");
   const piloto = db.pilotos.find((p) => p.id === pid);
 
   const ingresar = () => {
-    const limpio = doc.trim().toLowerCase().replace(/[.\s]/g, "");
-    const p = db.pilotos.find((x) => (x.dni || "").toLowerCase().replace(/[.\s]/g, "") === limpio);
+    const limpio = doc.trim().toLowerCase().replace(/[.\s-]/g, "");
+    const p = db.pilotos.find((x) => (x.dni || "").toLowerCase().replace(/[.\s-]/g, "") === limpio);
     if (!p) { setErr("No encontramos ese documento. Verifícalo o pide a la organización que cargue tu ficha base."); return; }
-    setErr(""); setPid(p.id);
+    const esperado = (p.dni || "").replace(/\D/g, "").slice(0, 4);
+    if (!esperado || pin.replace(/\D/g, "") !== esperado) { setErr("PIN incorrecto. Tu PIN son los 4 primeros dígitos de tu documento."); return; }
+    setErr(""); setPin(""); setPid(p.id);
   };
 
   if (!piloto) {
@@ -805,13 +827,17 @@ function PilotoFlow({ db, persist }) {
       <div className="login-wrap">
         <div className="login-card">
           <span className="eyebrow">Portal del Piloto</span>
-          <h2>Ingresa con tu documento</h2>
-          <p className="muted">DNI / RUT / CPF — el mismo que la organización registró en tu ficha.</p>
+          <h2>Ingresa a tu portal</h2>
+          <p className="muted">Tu documento (DNI / RUT / CPF) y tu PIN.</p>
+          <label className="lbl">Documento</label>
           <input className="inp" placeholder="Ej: 20.114.882-3" value={doc}
             onChange={(e) => setDoc(e.target.value)} onKeyDown={(e) => e.key === "Enter" && ingresar()} />
+          <label className="lbl">PIN (4 primeros dígitos de tu documento)</label>
+          <input className="inp" inputMode="numeric" maxLength={4} placeholder="••••" value={pin}
+            onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))} onKeyDown={(e) => e.key === "Enter" && ingresar()} />
           {err && <div className="alert">{err}</div>}
           <button className="btn-primary full" onClick={ingresar}>Ingresar <ChevronRight size={16} /></button>
-          <div className="hint">Demo: <code>20.114.882-3</code> (Valentina, CCV) · <code>38.221.554</code> (Lucas, CAV — reportó error).</div>
+          <div className="hint">Tu PIN son los <b>4 primeros dígitos</b> de tu documento. Si tu ficha no existe aún, pídela a la organización.</div>
         </div>
       </div>
     );
@@ -820,6 +846,7 @@ function PilotoFlow({ db, persist }) {
   const tabs = [
     { id: "ficha", label: "Mi ficha", icon: <User size={15} /> },
     { id: "preacred", label: "Pre-acreditación", icon: <ClipboardCheck size={15} /> },
+    { id: "circuitos", label: "Circuitos", icon: <Map size={15} /> },
     { id: "historia", label: "Mi historia", icon: <Clock size={15} /> },
     { id: "ranking", label: "Mi ranking", icon: <Trophy size={15} /> },
   ];
@@ -833,8 +860,41 @@ function PilotoFlow({ db, persist }) {
       </nav>
       {tab === "ficha" && <PilotoFicha db={db} persist={persist} piloto={piloto} />}
       {tab === "preacred" && <PilotoPreacred db={db} persist={persist} piloto={piloto} />}
+      {tab === "circuitos" && <PilotoCircuitos db={db} />}
       {tab === "historia" && <PilotoHistoria db={db} piloto={piloto} />}
       {tab === "ranking" && <PilotoRanking db={db} piloto={piloto} />}
+    </div>
+  );
+}
+
+function PilotoCircuitos({ db }) {
+  const [sel, setSel] = useState(null);
+  const campSerie = (serie) => (serie === "CCV" ? "CCV - Campeonato Chile de Velocidad" : "CAV - Campeonato Argentino de Velocidad");
+  return (
+    <div className="panel">
+      <div className="panel-head"><h3>Trazados de los circuitos</h3><span className="muted small">Ver e imprimir</span></div>
+      <p className="muted small">Toca un circuito para ver su trazado, descargarlo o imprimirlo.</p>
+      {["CAV", "CCV"].map((serie) => (
+        <div key={serie} className="cal-block">
+          <h4 className="cal-h">{serie === "CCV" ? "CCV · Campeonato Chile de Velocidad" : "CAV · Campeonato Argentino de Velocidad"}</h4>
+          <div className="fecha-list">
+            {SERIES[serie].map((f) => (
+              <div key={f.id} className="fecha-card">
+                <div className="fecha-main">
+                  <span className="fecha-serie">{serie}{db.fechasImg?.[f.id] && <em className="live">● con plano</em>}</span>
+                  <b>{f.n}</b>
+                  <span className="fecha-when"><Calendar size={13} /> {f.txt}</span>
+                  <span className="fecha-where"><MapPin size={13} /> {f.circuito}</span>
+                </div>
+                <div className="fecha-cta">
+                  <button className="btn-secondary" onClick={() => setSel({ ...f, serie, campeonato: campSerie(serie) })}><Map size={14} /> Ver / imprimir</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+      {sel && <TrazadoModal fecha={sel} campeonato={sel.campeonato} img={db.fechasImg?.[sel.id]} onClose={() => setSel(null)} />}
     </div>
   );
 }
@@ -867,34 +927,63 @@ function PilotoHeader({ piloto }) {
 
 /* Ficha CAMOD — solo lectura para el piloto + confirmar / rechazar */
 function PilotoFicha({ db, persist, piloto }) {
-  const setEstado = (estadoFicha) => {
-    const np = { ...piloto, estadoFicha };
+  const [editando, setEditando] = useState(false);
+  const [form, setForm] = useState(piloto);
+  const pend = (db.solicitudes || []).find((s) => s.pilotoId === piloto.id && s.estado === "pendiente");
+  const campo = (k, v) => setForm((x) => aplicarAuto(x, k, v));
+
+  const confirmar = () => {
+    const np = { ...piloto, estadoFicha: "confirmada" };
     persist({ ...db, pilotos: db.pilotos.map((p) => (p.id === piloto.id ? np : p)) }, () => rpcPiloto(np));
+  };
+  const enviarSolicitud = () => {
+    const cambios = FICHA_FIELDS.filter((f) => f && f.k).map((f) => f.k)
+      .filter((k) => String(form[k] ?? "") !== String(piloto[k] ?? ""))
+      .map((k) => ({ campo: k, label: labelCampo(k), de: piloto[k] ?? "", a: form[k] ?? "" }));
+    if (cambios.length === 0) { setEditando(false); return; }
+    const sol = { id: `sol-${Date.now()}`, pilotoId: piloto.id, piloto: nombreCompleto(piloto), ts: new Date().toISOString(), estado: "pendiente", cambios };
+    const sols = [sol, ...(db.solicitudes || [])];
+    persist({ ...db, solicitudes: sols }, () => rpcSolicitudes(sols));
+    setEditando(false);
+  };
+  const cancelarSolicitud = () => {
+    const sols = (db.solicitudes || []).map((x) => (x.id === pend.id ? { ...x, estado: "cancelada", resuelto: new Date().toISOString() } : x));
+    persist({ ...db, solicitudes: sols }, () => rpcSolicitudes(sols));
   };
 
   return (
     <div className="panel">
-      <div className="panel-head"><h3>Gestiona tu acreditación</h3><span className="muted small">Datos requeridos por CAMOD</span></div>
-      <p className="muted small">Esta es tu información base, cargada por la organización. No es editable aquí: revísala con atención, porque es la que irá en tu pase.</p>
+      <div className="panel-head"><h3>Mi ficha</h3><span className="muted small">Datos requeridos por la organización</span></div>
 
-      <FichaFields data={piloto} edit={false} />
-
-      {piloto.estadoFicha === "rechazada" ? (
-        <div className="reject-msg">
-          <AlertTriangle size={20} />
-          <div>
-            <b>Reportaste una discrepancia en tus datos.</b>
-            <p>Acércate al <b>staff de GP3 en pista</b> para corregir tu información y finalizar tu acreditación por el conducto normal. El staff actualizará tu ficha presencialmente.</p>
+      {pend ? (
+        <>
+          <div className="pend-banner">
+            <Clock size={18} />
+            <div>
+              <b>Tienes una solicitud de cambios pendiente de aprobación.</b>
+              <ul className="pend-list">{pend.cambios.map((c) => <li key={c.campo}><b>{c.label}:</b> {String(c.de) || "—"} → {String(c.a) || "—"}</li>)}</ul>
+            </div>
           </div>
-          <button className="btn-ghost" onClick={() => setEstado("pendiente")}>Cancelar reporte</button>
-        </div>
+          <FichaFields data={piloto} edit={false} />
+          <div className="panel-actions"><button className="btn-ghost" onClick={cancelarSolicitud}><X size={14} /> Cancelar solicitud</button></div>
+        </>
+      ) : editando ? (
+        <>
+          <p className="muted small">Modifica lo que necesites. Tus cambios <b>no se aplican de inmediato</b>: quedan como una solicitud para que la organización los apruebe.</p>
+          <FichaFields data={form} edit db={db} onChange={campo} />
+          <div className="panel-actions"><span className="spacer" /><button className="btn-ghost" onClick={() => { setForm(piloto); setEditando(false); }}><X size={14} /> Cancelar</button><button className="btn-primary" onClick={enviarSolicitud}><Check size={15} /> Enviar solicitud de cambios</button></div>
+        </>
       ) : (
-        <div className="panel-actions">
-          {piloto.estadoFicha === "confirmada"
-            ? <span className="ok-text small"><BadgeCheck size={14} /> Confirmaste que tus datos son correctos.</span>
-            : <button className="btn-primary" onClick={() => setEstado("confirmada")}><Check size={16} /> Mis datos están correctos</button>}
-          <button className="btn-outline" onClick={() => setEstado("rechazada")}><X size={15} /> Hay un error en mis datos</button>
-        </div>
+        <>
+          <p className="muted small">Esta es tu información base, cargada por la organización: es la que irá en tu pase. Si algo está mal, solicita el cambio y la organización lo revisará.</p>
+          <FichaFields data={piloto} edit={false} />
+          <div className="panel-actions">
+            {piloto.estadoFicha === "confirmada"
+              ? <span className="ok-text small"><BadgeCheck size={14} /> Confirmaste que tus datos son correctos.</span>
+              : <button className="btn-primary" onClick={confirmar}><Check size={16} /> Mis datos están correctos</button>}
+            <button className="btn-outline" onClick={() => { setForm(piloto); setEditando(true); }}><Pencil size={15} /> Solicitar cambios</button>
+          </div>
+        </>
       )}
     </div>
   );
@@ -927,7 +1016,7 @@ function PilotoPreacred({ db, persist, piloto }) {
     <div className="panel">
       <div className="panel-head"><h3>Pre-acreditación · fechas 2026</h3></div>
       <p className="muted small">
-        Solo puedes pre-acreditarte en la <b>fecha en curso</b> (la que el staff de GP3 haya iniciado).
+        Tu pre-acreditación se <b>habilita automáticamente</b> desde el día anterior a cada fecha y se <b>cierra el sábado</b> del evento.
         {ultFecha ? <> Usaremos como base los datos de tu última carrera ({ultFecha.n} · {ultFecha.circuito}).</> : <> Usaremos los datos de tu ficha.</>}
       </p>
 
@@ -944,11 +1033,11 @@ function PilotoPreacred({ db, persist, piloto }) {
       <div className="fecha-list">
         {todas.map((f) => {
           const pre = yaPre(f.id);
-          const activa = enCurso(f.id);
+          const activa = preacredAbierta(f);
           return (
             <div key={f.id} className={`fecha-card ${sel === f.id ? "sel" : ""} ${!activa ? "off" : ""}`}>
               <div className="fecha-main">
-                <span className="fecha-serie">{f.serie}{activa && <em className="live">● EN CURSO</em>}</span>
+                <span className="fecha-serie">{f.serie}{activa && <em className="live">● ABIERTA</em>}</span>
                 <b>{f.n}</b>
                 <span className="fecha-when"><Calendar size={13} /> {f.txt}</span>
                 <span className="fecha-where"><MapPin size={13} /> {f.circuito}</span>
@@ -972,7 +1061,7 @@ function PilotoPreacred({ db, persist, piloto }) {
         })}
       </div>
 
-      {fecha && enCurso(fecha.id) && !yaPre(fecha.id) && !bloqueado && (
+      {fecha && preacredAbierta(fecha) && !yaPre(fecha.id) && !bloqueado && (
         <div className="confirm-box">
           <h4>Confirma tu pre-acreditación</h4>
           <div className="confirm-grid">
@@ -997,7 +1086,7 @@ function PilotoPreacred({ db, persist, piloto }) {
       )}
       {aviso && aviso.modo === "nodisp" && (
         <Modal onClose={() => setAviso(null)} icon={<Clock size={22} />} titulo="Fecha no disponible aún">
-          La pre-acreditación de <b>{aviso.n}</b> ({aviso.circuito}) se iniciará por el <b>staff de GP3</b> según el calendario agendado. Cuando la fecha esté en curso, aparecerá habilitada aquí.
+          La pre-acreditación de <b>{aviso.n}</b> ({aviso.circuito}) no está abierta en este momento. {txtVentana(aviso)}
         </Modal>
       )}
       {aviso && aviso.modo === "trazado" && (
@@ -1017,9 +1106,22 @@ function PilotoHistoria({ db, piloto }) {
   mis.forEach((r) => { (byFecha[r.fechaId] = byFecha[r.fechaId] || []).push(r); });
   const fechas = Object.keys(byFecha).sort((a, b) => (TODAS_FECHAS[b]?.ini || "").localeCompare(TODAS_FECHAS[a]?.ini || ""));
   const totalPts = mis.reduce((s, r) => s + r.puntos, 0);
+  const carreras = mis.filter((r) => r.tanda === "Carrera");
+  const posVal = carreras.filter((r) => r.pos > 0).map((r) => r.pos);
+  const victorias = carreras.filter((r) => r.pos === 1).length;
+  const podios = carreras.filter((r) => r.pos >= 1 && r.pos <= 3).length;
+  const poles = mis.filter((r) => r.tanda === "Pole" && r.pos === 1).length;
+  const mejor = posVal.length ? Math.min(...posVal) : null;
+  const prom = posVal.length ? (posVal.reduce((a, b) => a + b, 0) / posVal.length).toFixed(1) : null;
+  const corridas = new Set(carreras.filter((r) => r.pos > 0).map((r) => r.fechaId)).size;
+  const stats = [
+    { n: victorias, l: "Victorias" }, { n: podios, l: "Podios" }, { n: poles, l: "Poles" },
+    { n: mejor ? `P${mejor}` : "—", l: "Mejor resultado" }, { n: prom || "—", l: "Prom. posición" }, { n: corridas, l: "Carreras corridas" },
+  ];
   return (
     <div className="panel">
       <div className="panel-head"><h3>Mi historia en GP3</h3><span className="big-pts">{fmtPts(totalPts)} <em>pts acumulados</em></span></div>
+      <div className="stats-grid">{stats.map((x, i) => <div key={i} className="stat-card"><span className="stat-n">{x.n}</span><span className="stat-l">{x.l}</span></div>)}</div>
       {fechas.length === 0 && <div className="empty">Todavía no hay carreras registradas para tu ficha.</div>}
       <div className="timeline">
         {fechas.map((fid) => {
@@ -1526,19 +1628,61 @@ const PaseField = ({ k, v }) => (<div className="pf"><span>{k}</span><b>{v}</b><
    ============================================================ */
 function OrgFlow({ db, persist }) {
   const [tab, setTab] = useState("pilotos");
+  const pendCount = (db.solicitudes || []).filter((s) => s.estado === "pendiente").length;
   const tabs = [
     { id: "pilotos", label: "Pilotos", icon: <Users size={15} /> },
+    { id: "solicitudes", label: "Solicitudes", icon: <ClipboardCheck size={15} /> },
     { id: "calendario", label: "Calendario", icon: <Calendar size={15} /> },
     { id: "puntajes", label: "Puntajes / Ranking", icon: <Trophy size={15} /> },
   ];
   return (
     <div className="portal">
       <nav className="subnav">
-        {tabs.map((t) => (<button key={t.id} className={`subnav-btn ${tab === t.id ? "on" : ""}`} onClick={() => setTab(t.id)}>{t.icon}<span>{t.label}</span></button>))}
+        {tabs.map((t) => (<button key={t.id} className={`subnav-btn ${tab === t.id ? "on" : ""}`} onClick={() => setTab(t.id)}>{t.icon}<span>{t.label}</span>{t.id === "solicitudes" && pendCount > 0 && <span className="tab-badge">{pendCount}</span>}</button>))}
       </nav>
       {tab === "pilotos" && <OrgPilotos db={db} persist={persist} />}
+      {tab === "solicitudes" && <OrgSolicitudes db={db} persist={persist} />}
       {tab === "calendario" && <OrgCalendario db={db} />}
       {tab === "puntajes" && <OrgPuntajes db={db} persist={persist} onLock={() => setTab("pilotos")} />}
+    </div>
+  );
+}
+
+function OrgSolicitudes({ db, persist }) {
+  const sols = db.solicitudes || [];
+  const pend = sols.filter((s) => s.estado === "pendiente");
+  const hist = sols.filter((s) => s.estado !== "pendiente").slice(0, 30);
+  const aprobar = (s) => {
+    const pil = db.pilotos.find((p) => p.id === s.pilotoId);
+    if (!pil) { rechazar(s); return; }
+    const cambios = {}; s.cambios.forEach((c) => { cambios[c.campo] = c.a; });
+    const np = { ...pil, ...cambios };
+    const pilotos = db.pilotos.map((p) => (p.id === s.pilotoId ? np : p));
+    const solicitudes = sols.map((x) => (x.id === s.id ? { ...x, estado: "aprobada", resuelto: new Date().toISOString() } : x));
+    persist({ ...db, pilotos, solicitudes }, async () => { await rpcPiloto(np); await rpcSolicitudes(solicitudes); });
+  };
+  const rechazar = (s) => {
+    const solicitudes = sols.map((x) => (x.id === s.id ? { ...x, estado: "rechazada", resuelto: new Date().toISOString() } : x));
+    persist({ ...db, solicitudes }, () => rpcSolicitudes(solicitudes));
+  };
+  return (
+    <div className="panel">
+      <div className="panel-head"><h3>Solicitudes de cambio</h3><span className="muted small">{pend.length} pendiente{pend.length === 1 ? "" : "s"}</span></div>
+      {pend.length === 0 && <div className="empty">No hay solicitudes pendientes.</div>}
+      {pend.map((s) => (
+        <div key={s.id} className="sol-card">
+          <div className="sol-head"><b>{s.piloto}</b><span className="muted small">{new Date(s.ts).toLocaleString("es-CL")}</span></div>
+          <ul className="sol-changes">{s.cambios.map((c) => <li key={c.campo}><span className="sol-lbl">{c.label}</span><span className="sol-de">{String(c.de) || "—"}</span><span className="sol-arrow">→</span><span className="sol-a">{String(c.a) || "—"}</span></li>)}</ul>
+          <div className="panel-actions"><span className="spacer" /><button className="btn-outline" onClick={() => rechazar(s)}><X size={14} /> Rechazar</button><button className="btn-primary" onClick={() => aprobar(s)}><Check size={15} /> Aprobar y aplicar</button></div>
+        </div>
+      ))}
+      {hist.length > 0 && <div className="res-head"><span className="carga-title">Resueltas</span></div>}
+      {hist.map((s) => (
+        <div key={s.id} className="sol-card done">
+          <div className="sol-head"><b>{s.piloto}</b><span className={`state-chip sm ${s.estado === "aprobada" ? "ok" : "red"}`}>{s.estado}</span></div>
+          <ul className="sol-changes">{s.cambios.map((c) => <li key={c.campo}><span className="sol-lbl">{c.label}</span> {String(c.a) || "—"}</li>)}</ul>
+        </div>
+      ))}
     </div>
   );
 }
@@ -2434,6 +2578,26 @@ select.inp{appearance:auto}
 .traz-img-head .traz-img-fecha{font-size:.85rem;color:#E11D2A;font-weight:700}
 .traz-img-full{display:block;width:100%;max-height:62vh;object-fit:contain;background:#F3F4F6}
 @media(max-width:520px){.img-maint-grid{grid-template-columns:1fr}}
+.tab-badge{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;margin-left:6px;background:#E11D2A;color:#fff;border-radius:9px;font-size:.72rem;font-weight:700}
+.pend-banner{display:flex;gap:10px;align-items:flex-start;background:#FFF7ED;border:1px solid #FED7AA;border-radius:10px;padding:12px 14px;margin-bottom:12px;color:#9A3412}
+.pend-list{margin:6px 0 0;padding-left:18px;font-size:.86rem}
+.pend-list li{margin:2px 0}
+.sol-card{border:1px solid #E5E7EB;border-radius:12px;padding:14px 16px;margin-bottom:12px;background:#fff}
+.sol-card.done{opacity:.75}
+.sol-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.sol-changes{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.sol-changes li{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:.9rem}
+.sol-lbl{font-size:.7rem;text-transform:uppercase;letter-spacing:.04em;color:#8a8a86;font-weight:600;min-width:120px}
+.sol-de{color:#9A3412;text-decoration:line-through;opacity:.8}
+.sol-arrow{color:#9CA3AF}
+.sol-a{font-weight:600;color:#16171D}
+.state-chip.sm{font-size:.72rem;padding:2px 8px}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-bottom:16px}
+.stat-card{background:#F3F4F6;border-radius:10px;padding:12px;text-align:center}
+.stat-n{display:block;font-family:var(--disp);font-weight:800;font-size:1.5rem;color:#16171D;line-height:1}
+.stat-l{display:block;font-size:.74rem;color:#6B7280;margin-top:4px;text-transform:uppercase;letter-spacing:.03em}
+.login-card .lbl{display:block;text-align:left;font-size:.7rem;letter-spacing:.05em;text-transform:uppercase;color:#8a8a86;font-weight:600;margin:10px 0 4px}
+.login-card .inp{width:100%}
 .bulk-controls{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:10px}
 .bulk-info{max-width:640px}
 
