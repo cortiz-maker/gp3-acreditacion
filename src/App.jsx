@@ -1166,7 +1166,8 @@ function PilotoHistoria({ db, piloto }) {
               <div className="tl-body">
                 <b>{f?.n} · {f?.circuito}</b>
                 <span className="muted small">{f?.txt} · {(carrera || pole)?.categoria}</span>
-                {pole && <span className="tl-pole">Pole {pole.pos > 0 ? `P${pole.pos}` : "—"} · {fmtPts(pole.puntos)} pts</span>}
+                {carrera && carrera.pos === 0 && carrera.motivo && <span className="tl-nopos">{carrera.motivo}</span>}
+                {pole && <span className="tl-pole">Pole {pole.pos > 0 ? `P${pole.pos}` : (pole.motivo || "—")} · {fmtPts(pole.puntos)} pts</span>}
               </div>
               <span className="tl-pts">{fmtPts(fechaPts)} pts</span>
             </div>
@@ -2034,12 +2035,16 @@ function OrgPuntajes({ db, persist, onLock }) {
           const categoria = ci.cat >= 0 ? String(r[ci.cat] ?? "").trim() : "";
           const posRaw = String(r[ci.pos] ?? "").trim();
           if (!dorsal) continue;
+          const NOPOS = { DNF: "DNF", NT: "No tomó la partida", NE: "No se presentó", AB: "Abandono", DSQ: "Descalificado" };
+          const motivo = NOPOS[posRaw.toUpperCase()];
           const pos = Number(posRaw);
-          if (!posRaw || isNaN(pos) || pos <= 0) { sinPos++; continue; }
+          if (!posRaw) { sinPos++; continue; }
+          if ((isNaN(pos) || pos <= 0) && !motivo) { sinPos++; continue; }
           const pil = db.pilotos.find((x) => x.campeonato === camp && String(x.dorsal) === dorsal && (!categoria || normKey(x.categoria) === normKey(categoria)));
           if (!pil) { noMatch.push(`#${dorsal}${categoria ? " " + categoria : ""}`); continue; }
-          const puntos = calcularPuntos(camp, tandaImp, pos);
-          nuevos.push({ id: `r-${fechaImp}-${tandaImp.toLowerCase()}-${pil.id}`, pilotoId: pil.id, campeonato: camp, categoria: pil.categoria, fechaId: fechaImp, tanda: tandaImp, pos, puntos });
+          const posFinal = motivo ? 0 : pos;
+          const puntos = motivo ? 0 : calcularPuntos(camp, tandaImp, pos);
+          nuevos.push({ id: `r-${fechaImp}-${tandaImp.toLowerCase()}-${pil.id}`, pilotoId: pil.id, campeonato: camp, categoria: pil.categoria, fechaId: fechaImp, tanda: tandaImp, pos: posFinal, puntos, ...(motivo ? { motivo } : {}) });
           nf++;
         }
         if (nuevos.length === 0) { setImpMsg({ err: `No se importó nada.${noMatch.length ? " Sin coincidencia: " + noMatch.slice(0, 6).join(", ") : ""}` }); return; }
@@ -2625,6 +2630,7 @@ select.inp{appearance:auto}
 .stat-card{background:#F3F4F6;border-radius:10px;padding:12px;text-align:center}
 .stat-n{display:block;font-family:var(--disp);font-weight:800;font-size:1.5rem;color:#16171D;line-height:1}
 .stat-l{display:block;font-size:.74rem;color:#6B7280;margin-top:4px;text-transform:uppercase;letter-spacing:.03em}
+.tl-nopos{display:inline-block;margin-top:2px;font-size:.78rem;font-weight:700;color:#B42318;background:#FEF2F2;border-radius:6px;padding:1px 8px;width:fit-content}
 .login-card .lbl{display:block;text-align:left;font-size:.7rem;letter-spacing:.05em;text-transform:uppercase;color:#8a8a86;font-weight:600;margin:10px 0 4px}
 .login-card .inp{width:100%}
 .bulk-controls{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:10px}
