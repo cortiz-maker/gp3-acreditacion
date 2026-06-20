@@ -36,6 +36,42 @@ const PAISES = [
   "República Dominicana", "Uruguay", "Venezuela",
 ];
 
+/* Provincias de Argentina (desplegable Provincia, solo pilotos AR) */
+const PROVINCIAS_AR = [
+  "Buenos Aires", "Ciudad Autónoma de Buenos Aires", "Catamarca", "Chaco", "Chubut",
+  "Córdoba", "Corrientes", "Entre Ríos", "Formosa", "Jujuy", "La Pampa", "La Rioja",
+  "Mendoza", "Misiones", "Neuquén", "Río Negro", "Salta", "San Juan", "San Luis",
+  "Santa Cruz", "Santa Fe", "Santiago del Estero", "Tierra del Fuego", "Tucumán",
+];
+/* Localidades principales por provincia (sugerencias del desplegable Localidad).
+   No es exhaustivo: la casilla permite escribir si la localidad no está listada. */
+const LOCALIDADES_AR = {
+  "Buenos Aires": ["La Plata","Mar del Plata","Bahía Blanca","Tandil","Olavarría","Azul","Necochea","Junín","Pergamino","San Nicolás de los Arroyos","Zárate","Campana","Luján","Mercedes","Chivilcoy","Pehuajó","Tres Arroyos","Balcarce","Quilmes","Lanús","Avellaneda","Lomas de Zamora","La Matanza","Morón","San Isidro","Tigre","Pilar","Escobar","San Miguel","Moreno","Berazategui","Florencio Varela","Ezeiza","Cañuelas","Chascomús","Dolores","Bragado","Nueve de Julio","Lincoln","Trenque Lauquen"],
+  "Ciudad Autónoma de Buenos Aires": ["Ciudad Autónoma de Buenos Aires"],
+  "Catamarca": ["San Fernando del Valle de Catamarca","Andalgalá","Belén","Santa María","Tinogasta","Recreo"],
+  "Chaco": ["Resistencia","Barranqueras","Presidencia Roque Sáenz Peña","Villa Ángela","Charata","General San Martín","Quitilipi"],
+  "Chubut": ["Rawson","Trelew","Puerto Madryn","Comodoro Rivadavia","Esquel","Sarmiento","Gaiman"],
+  "Córdoba": ["Córdoba","Villa Carlos Paz","Río Cuarto","Villa María","San Francisco","Alta Gracia","Jesús María","Bell Ville","Río Tercero","Cosquín","La Falda","Marcos Juárez","Villa Dolores","Cruz del Eje","Arroyito"],
+  "Corrientes": ["Corrientes","Goya","Mercedes","Curuzú Cuatiá","Paso de los Libres","Santo Tomé","Bella Vista","Esquina"],
+  "Entre Ríos": ["Paraná","Concordia","Gualeguaychú","Concepción del Uruguay","Gualeguay","Victoria","Villaguay","La Paz","Colón","Federación"],
+  "Formosa": ["Formosa","Clorinda","Pirané","El Colorado","Las Lomitas"],
+  "Jujuy": ["San Salvador de Jujuy","Palpalá","San Pedro de Jujuy","Libertador General San Martín","Perico","La Quiaca","Humahuaca"],
+  "La Pampa": ["Santa Rosa","General Pico","Toay","Realicó","General Acha"],
+  "La Rioja": ["La Rioja","Chilecito","Aimogasta","Chamical","Chepes"],
+  "Mendoza": ["Mendoza","San Rafael","Godoy Cruz","Guaymallén","Las Heras","Maipú","Luján de Cuyo","San Martín","Tunuyán","Rivadavia","Malargüe","General Alvear"],
+  "Misiones": ["Posadas","Oberá","Eldorado","Puerto Iguazú","Apóstoles","Leandro N. Alem","Montecarlo","Puerto Rico"],
+  "Neuquén": ["Neuquén","Cutral Có","Plaza Huincul","Zapala","San Martín de los Andes","Villa La Angostura","Centenario","Plottier","Junín de los Andes"],
+  "Río Negro": ["Viedma","San Carlos de Bariloche","General Roca","Cipolletti","Villa Regina","Cinco Saltos","Allen","El Bolsón","Choele Choel"],
+  "Salta": ["Salta","San Ramón de la Nueva Orán","Tartagal","General Güemes","Metán","Cafayate","Rosario de la Frontera","Cerrillos"],
+  "San Juan": ["San Juan","Rawson","Chimbas","Rivadavia","Pocito","Caucete","Jáchal","Santa Lucía"],
+  "San Luis": ["San Luis","Villa Mercedes","Merlo","La Punta","Justo Daract","Concarán"],
+  "Santa Cruz": ["Río Gallegos","Caleta Olivia","Pico Truncado","Las Heras","El Calafate","Puerto Deseado","Río Turbio"],
+  "Santa Fe": ["Santa Fe","Rosario","Rafaela","Venado Tuerto","Reconquista","Santo Tomé","Villa Gobernador Gálvez","Esperanza","Casilda","San Lorenzo","Cañada de Gómez","Funes","Firmat","Sunchales","Las Parejas"],
+  "Santiago del Estero": ["Santiago del Estero","La Banda","Termas de Río Hondo","Añatuya","Frías","Fernández"],
+  "Tierra del Fuego": ["Ushuaia","Río Grande","Tolhuin"],
+  "Tucumán": ["San Miguel de Tucumán","Yerba Buena","Tafí Viejo","Banda del Río Salí","Concepción","Aguilares","Monteros","Famaillá","Tafí del Valle"],
+};
+
 /* Identidad visual por campeonato (placeholder hasta cargar logos reales) */
 const CAMP_META = {
   "CCV - CAV Campeonato Binacional": { abbr: "BIN", color: "#7C3AED" },
@@ -1922,7 +1958,11 @@ function FichaFields({ data, edit, onChange }) {
             <label>{f.label}{f.arOnly && <em className="req-ar"> · solo AR</em>}</label>
             {edit ? (
               <div className="field-row">
-                {f.type === "select"
+                {f.k === "provincia"
+                  ? <select className="inp" value={val ?? ""} onChange={(e) => onChange("provincia", e.target.value)}><option value="">— Selecciona provincia —</option>{PROVINCIAS_AR.map((o) => <option key={o} value={o}>{o}</option>)}</select>
+                  : f.k === "localidad"
+                  ? <><input className="inp" list="ar-localidades" value={val ?? ""} placeholder={data.provincia ? "Selecciona o escribe la localidad" : "Elige primero la provincia"} onChange={(e) => onChange("localidad", e.target.value)} /><datalist id="ar-localidades">{(LOCALIDADES_AR[data.provincia] || []).map((o) => <option key={o} value={o} />)}</datalist></>
+                  : f.type === "select"
                   ? <select className="inp" value={val ?? ""} onChange={(e) => onChange(f.k, e.target.value)}>{f.opts.map((o) => <option key={o} value={o}>{o}</option>)}</select>
                   : <input className="inp" type={f.type === "date" ? "date" : "text"} value={val ?? ""} onChange={(e) => onChange(f.k, e.target.value)} />}
                 {age != null && <span className="age-badge">{age} años</span>}
