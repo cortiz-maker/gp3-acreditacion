@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+aimport React, { useState, useEffect, useRef } from "react";
 import {
   Flag, ChevronRight, User, Users, Calendar, Trophy, ClipboardCheck,
   Printer, Search, Plus, Check, X, ShieldCheck, Bike, MapPin,
@@ -1716,6 +1716,29 @@ function OrgPilotos({ db, persist }) {
   });
 
   if (verPerfil) return <PerfilPiloto db={db} piloto={verPerfil} onClose={() => setVerPerfil(null)} />;
+  if (editId) return (
+    <div className="panel">
+      <div className="panel-head"><h3>{editId === "__new__" ? "Nuevo piloto" : "Editar piloto"}</h3><button className="btn-ghost" onClick={() => setEditId(null)}><X size={14} /> Cerrar</button></div>
+      <FichaFields data={f} edit db={db} onChange={campo} />
+      <div className="img-maint">
+        <h4 className="img-maint-h"><ImageIcon size={15} /> Imágenes del piloto</h4>
+        <div className="img-maint-grid">
+          <ImgUpload label="Foto del piloto" value={f.foto} onChange={(v) => campo("foto", v)} shape="round" maxDim={520} />
+          <ImgUpload label="Logo del equipo" value={f.logoEquipo} onChange={(v) => campo("logoEquipo", v)} shape="rect" maxDim={400} />
+        </div>
+      </div>
+      <div className="panel-actions">
+        {editId !== "__new__" && (confDel
+          ? <><span className="del-warn"><AlertTriangle size={14} /> ¿Borrar a {nombreCompleto(f)} de forma permanente?</span>
+              <button className="btn-danger" onClick={borrar}><Trash2 size={14} /> Sí, borrar</button>
+              <button className="btn-ghost" onClick={() => setConfDel(false)}>No</button></>
+          : <button className="btn-danger-ghost" onClick={() => setConfDel(true)}><Trash2 size={14} /> Borrar piloto</button>)}
+        <span className="spacer" />
+        <button className="btn-ghost" onClick={() => setEditId(null)}><X size={14} /> Cancelar</button>
+        <button className="btn-primary" onClick={guardar}><Save size={15} /> Guardar ficha</button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="panel">
@@ -1813,6 +1836,52 @@ function OrgPuntajes({ db, persist, onLock }) {
   const [cat, setCat] = useState("Gp3 Cup Promocional");
   const [editing, setEditing] = useState(null); // {resultado, tanda, pos, puntos, motivo}
   const [showLog, setShowLog] = useState(false);
+  const serieCamp = camp.startsWith("CAV") ? "CAV" : "CCV";
+  const [fechaImp, setFechaImp] = useState((SERIES[serieCamp][2] || SERIES[serieCamp][0]).id);
+  const [tandaImp, setTandaImp] = useState("Pole");
+  const [impMsg, setImpMsg] = useState(null);
+  const fileRef = useRef(null);
+  const importarExcel = (file) => {
+    setImpMsg(null);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const wb = XLSX.read(ev.target.result, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+        const hi = rows.findIndex((r) => r.some((c) => String(c).toLowerCase().includes("dorsal")));
+        if (hi < 0) { setImpMsg({ err: "No encontré la columna 'Dorsal' en el archivo." }); return; }
+        const head = rows[hi].map((c) => String(c).toLowerCase());
+        const ci = { cat: head.findIndex((h) => h.includes("categor")), dor: head.findIndex((h) => h.includes("dorsal")), pos: head.findIndex((h) => h.includes("posici")) };
+        if (ci.dor < 0 || ci.pos < 0) { setImpMsg({ err: "Faltan columnas 'Dorsal' o 'Posición' en el encabezado." }); return; }
+        const nuevos = []; let nf = 0, sinPos = 0; const noMatch = [];
+        for (let i = hi + 1; i < rows.length; i++) {
+          const r = rows[i]; if (!r) continue;
+          const dorsal = String(r[ci.dor] ?? "").trim();
+          const categoria = ci.cat >= 0 ? String(r[ci.cat] ?? "").trim() : "";
+          const posRaw = String(r[ci.pos] ?? "").trim();
+          if (!dorsal) continue;
+          const pos = Number(posRaw);
+          if (!posRaw || isNaN(pos) || pos <= 0) { sinPos++; continue; }
+          const pil = db.pilotos.find((x) => x.campeonato === camp && String(x.dorsal) === dorsal && (!categoria || normKey(x.categoria) === normKey(categoria)));
+          if (!pil) { noMatch.push(`#${dorsal}${categoria ? " " + categoria : ""}`); continue; }
+          const puntos = calcularPuntos(camp, tandaImp, pos);
+          nuevos.push({ id: `r-${fechaImp}-${tandaImp.toLowerCase()}-${pil.id}`, pilotoId: pil.id, campeonato: camp, categoria: pil.categoria, fechaId: fechaImp, tanda: tandaImp, pos, puntos });
+          nf++;
+        }
+        if (nuevos.length === 0) { setImpMsg({ err: `No se importó nada.${noMatch.length ? " Sin coincidencia: " + noMatch.slice(0, 6).join(", ") : ""}` }); return; }
+        const keyExist = new Set(nuevos.map((n) => `${n.pilotoId}|${n.fechaId}|${n.tanda}`));
+        const base = db.resultados.filter((x) => !keyExist.has(`${x.pilotoId}|${x.fechaId}|${x.tanda}`));
+        const resultados = [...base, ...nuevos];
+        const fcha = TODAS_FECHAS[fechaImp];
+        const entrada = { id: `log-${Date.now()}`, ts: new Date().toISOString(), usuario: "admin", campeonato: camp, categoria: "(importación)", piloto: `${nf} resultados`, fecha: `${fcha?.n || fechaImp} · ${tandaImp}`, antes: {}, despues: {}, motivo: `Importación Excel: ${nf} cargados, ${sinPos} sin puntos, ${noMatch.length} sin coincidencia` };
+        persist({ ...db, resultados, cambiosLog: [entrada, ...(db.cambiosLog || [])] }, () => rpcResultados(resultados, entrada));
+        setImpMsg({ ok: `Importados ${nf} resultados · ${tandaImp} · ${fcha?.n}. ${sinPos} sin puntos. ${noMatch.length} sin coincidencia${noMatch.length ? ": " + noMatch.slice(0, 8).join(", ") : ""}.` });
+      } catch (e) { setImpMsg({ err: "Error al leer el Excel: " + (e?.message || e) }); }
+    };
+    reader.onerror = () => setImpMsg({ err: "No se pudo leer el archivo." });
+    reader.readAsArrayBuffer(file);
+  };
 
   const pilotoNombre = (id) => { const p = db.pilotos.find((x) => x.id === id); return p ? `#${p.dorsal} ${nombreCompleto(p)}` : "—"; };
   const resultadosCat = db.resultados
@@ -1851,12 +1920,18 @@ function OrgPuntajes({ db, persist, onLock }) {
       <div className="panel-head"><h3>Puntajes y ranking</h3><span className="admin-chip"><Unlock size={12} /> admin · escala {escalaDe(camp)} <button className="btn-link" onClick={onLock}>bloquear</button></span></div>
 
       <div className="bulk-box">
-        <div><b>Carga masiva desde Excel</b><p className="muted small">La carga de puntajes se hace por importación de la planilla <code>Base_Puntajes</code> (mismo formato del Excel que analizamos). Aquí solo se editan registros existentes, con bitácora.</p></div>
-        <button className="btn-outline" disabled><Plus size={14} /> Importar Excel (pronto)</button>
+        <div className="bulk-info"><b>Carga de puntajes desde Excel</b><p className="muted small">Elige <b>campeonato</b> (abajo), <b>fecha</b> y <b>tanda</b>; luego sube la planilla con columnas <code>Categoría</code>, <code>Dorsal</code> y <code>Posición</code>. Los puntos se calculan con la escala <b>{escalaDe(camp)}</b>. Posición 0 o en blanco = no puntúa. Volver a importar la misma fecha+tanda reemplaza esos resultados.</p></div>
+        <div className="bulk-controls">
+          <label className="sel-inline">Fecha<select value={fechaImp} onChange={(e) => setFechaImp(e.target.value)}>{SERIES[serieCamp].map((fx) => <option key={fx.id} value={fx.id}>{fx.n} · {fx.circuito}</option>)}</select></label>
+          <label className="sel-inline">Tanda<select value={tandaImp} onChange={(e) => setTandaImp(e.target.value)}><option value="Pole">Pole</option><option value="Carrera">Carrera</option></select></label>
+          <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={(e) => { const ff = e.target.files && e.target.files[0]; if (ff) importarExcel(ff); e.target.value = ""; }} />
+          <button className="btn-primary" onClick={() => fileRef.current && fileRef.current.click()}><Upload size={14} /> Importar Excel</button>
+        </div>
       </div>
+      {impMsg && <div className={impMsg.err ? "inline-warn" : "info-bar"}>{impMsg.err || impMsg.ok}</div>}
 
       <div className="filtros">
-        <SelectInline label="Campeonato" v={camp} opts={CAMPEONATOS} onChange={(v) => { setCamp(v); setEditing(null); }} />
+        <SelectInline label="Campeonato" v={camp} opts={CAMPEONATOS} onChange={(v) => { setCamp(v); setEditing(null); const sc = v.startsWith("CAV") ? "CAV" : "CCV"; setFechaImp((SERIES[sc][2] || SERIES[sc][0]).id); setImpMsg(null); }} />
         <SelectInline label="Categoría" v={cat} opts={CATEGORIAS} onChange={(v) => { setCat(v); setEditing(null); }} />
       </div>
 
@@ -2344,6 +2419,8 @@ select.inp{appearance:auto}
 .trazado-head{display:flex;align-items:center;gap:7px;padding:9px 12px;background:#1a2d6e;color:#fff;font-weight:600;font-size:.9rem}
 .trazado-img{display:block;width:100%;max-height:360px;object-fit:contain;background:#F3F4F6}
 @media(max-width:520px){.img-maint-grid{grid-template-columns:1fr}}
+.bulk-controls{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:10px}
+.bulk-info{max-width:640px}
 
 .reject-msg{display:flex;gap:14px;align-items:flex-start;background:#FFF7F6;border:1px solid #F3C2C2;border-radius:12px;padding:16px;margin-top:8px}
 .reject-msg svg{color:var(--red);flex-shrink:0;margin-top:2px}
