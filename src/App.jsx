@@ -104,30 +104,56 @@ function fotoDe(p) {
 }
 
 /* Comprime una imagen (redimensiona y exporta) para no inflar la base */
-function comprimirImagen(file, maxDim, cb) {
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    const img = new Image();
-    img.onload = () => {
-      let { width: w, height: h } = img;
-      if (w > maxDim || h > maxDim) {
-        if (w >= h) { h = Math.round(h * maxDim / w); w = maxDim; }
-        else { w = Math.round(w * maxDim / h); h = maxDim; }
-      }
-      const cv = document.createElement("canvas");
-      cv.width = w; cv.height = h;
-      const ctx = cv.getContext("2d");
-      ctx.drawImage(img, 0, 0, w, h);
-      let out;
-      try { out = cv.toDataURL("image/jpeg", 0.72); }
-      catch (_) { out = cv.toDataURL(); }
-      cb(out);
+/* Extrae el mayor JPEG incrustado en un archivo (sirve para RAW tipo .ARW/.CR2/.NEF,
+   que llevan una vista previa JPEG embebida). Busca segmentos SOI(FFD8)…EOI(FFD9). */
+function extraerJpegEmbebido(bytes) {
+  let start = -1, best = null, bestLen = 0;
+  for (let i = 0; i + 1 < bytes.length; i++) {
+    if (bytes[i] !== 0xFF) continue;
+    const m = bytes[i + 1];
+    if (m === 0xD8 && start === -1) start = i;
+    else if (m === 0xD9 && start !== -1) {
+      const len = i + 2 - start;
+      if (len > bestLen) { bestLen = len; best = bytes.slice(start, i + 2); }
+      start = -1;
+    }
+  }
+  return (best && bestLen >= 2000) ? best : null;
+}
+/* Carga un archivo de imagen como <img>. Si el navegador no lo decodifica (RAW),
+   intenta usar el JPEG de vista previa embebido. Devuelve null si no se puede. */
+function archivoAImagen(file, cb) {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => { cb(img); setTimeout(() => URL.revokeObjectURL(url), 1500); };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    const fin = (buf) => {
+      const jpg = extraerJpegEmbebido(new Uint8Array(buf));
+      if (!jpg) { cb(null); return; }
+      const u2 = URL.createObjectURL(new Blob([jpg], { type: "image/jpeg" }));
+      const i2 = new Image();
+      i2.onload = () => { cb(i2); setTimeout(() => URL.revokeObjectURL(u2), 1500); };
+      i2.onerror = () => { URL.revokeObjectURL(u2); cb(null); };
+      i2.src = u2;
     };
-    img.onerror = () => cb("");
-    img.src = e.target.result;
+    if (file.arrayBuffer) file.arrayBuffer().then(fin).catch(() => cb(null));
+    else { const r = new FileReader(); r.onload = (e) => fin(e.target.result); r.onerror = () => cb(null); r.readAsArrayBuffer(file); }
   };
-  reader.onerror = () => cb("");
-  reader.readAsDataURL(file);
+  img.src = url;
+}
+function comprimirImagen(file, maxDim, cb) {
+  archivoAImagen(file, (img) => {
+    if (!img) { cb(""); return; }
+    let w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+    if (w > maxDim || h > maxDim) {
+      if (w >= h) { h = Math.round(h * maxDim / w); w = maxDim; }
+      else { w = Math.round(w * maxDim / h); h = maxDim; }
+    }
+    const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+    cv.getContext("2d").drawImage(img, 0, 0, w, h);
+    try { cb(cv.toDataURL("image/jpeg", 0.72)); } catch (_) { cb(cv.toDataURL()); }
+  });
 }
 
 /* Recorta un retrato (3:4) encuadrando de la cintura hacia arriba.
@@ -164,15 +190,10 @@ async function recortarRetrato(img) {
   try { return cv.toDataURL("image/jpeg", 0.78); } catch (_) { return cv.toDataURL(); }
 }
 function enmarcarPiloto(file, cb) {
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    const img = new Image();
-    img.onload = async () => { try { cb(await recortarRetrato(img)); } catch (_) { cb(""); } };
-    img.onerror = () => cb("");
-    img.src = e.target.result;
-  };
-  reader.onerror = () => cb("");
-  reader.readAsDataURL(file);
+  archivoAImagen(file, async (img) => {
+    if (!img) { cb(""); return; }
+    try { cb(await recortarRetrato(img)); } catch (_) { cb(""); }
+  });
 }
 
 /* Mantenedor de una imagen: subir / cambiar / quitar, con vista previa */
@@ -187,7 +208,7 @@ function ImgUpload({ label, value, onChange, shape = "rect", maxDim = 600, hint,
     const done = (data) => {
       setBusy(false);
       if (data) onChange(data);
-      else setErr("No se pudo procesar la imagen. Prueba con un archivo JPG o PNG (las fotos HEIC del iPhone no siempre se pueden leer).");
+      else setErr("No se pudo procesar la imagen. Si es RAW (.ARW) sin vista previa embebida, o HEIC del iPhone, expórtala como JPG/PNG e inténtalo de nuevo.");
     };
     if (frame) enmarcarPiloto(file, done); else comprimirImagen(file, maxDim, done);
     e.target.value = "";
@@ -200,7 +221,7 @@ function ImgUpload({ label, value, onChange, shape = "rect", maxDim = 600, hint,
           {value ? <img src={value} alt={label} /> : <ImageIcon size={26} />}
         </div>
         <div className="imgup-actions">
-          <input ref={inputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={pick} />
+          <input ref={inputRef} type="file" accept="image/*,.arw,.cr2,.nef,.dng,.raf,.orf,.rw2" style={{ display: "none" }} onChange={pick} />
           <button type="button" className="btn-ghost sm" onClick={() => inputRef.current && inputRef.current.click()} disabled={busy}>
             <Upload size={13} /> {busy ? "Procesando…" : (value ? "Cambiar" : "Subir")}
           </button>
