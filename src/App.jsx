@@ -3,7 +3,7 @@ import {
   Flag, ChevronRight, User, Users, Calendar, Trophy, ClipboardCheck,
   Printer, Search, Plus, Check, X, ShieldCheck, Bike, MapPin,
   ArrowLeft, Pencil, BadgeCheck, Clock, LogOut, Save, Lock, Unlock,
-  AlertTriangle, Power, Map, Download, Trash2,
+  AlertTriangle, Power, Map, Download, Trash2, Image as ImageIcon, Upload,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import * as XLSX from "xlsx";
@@ -101,6 +101,64 @@ function fotoDe(p) {
   const ap = (p.apellidos || "").toUpperCase();
   const f = FOTOS.find((x) => String(x.dorsal) === String(p.dorsal) && ap.includes(x.ape));
   return f ? f.src : "";
+}
+
+/* Comprime una imagen (redimensiona y exporta) para no inflar la base */
+function comprimirImagen(file, maxDim, cb) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width: w, height: h } = img;
+      if (w > maxDim || h > maxDim) {
+        if (w >= h) { h = Math.round(h * maxDim / w); w = maxDim; }
+        else { w = Math.round(w * maxDim / h); h = maxDim; }
+      }
+      const cv = document.createElement("canvas");
+      cv.width = w; cv.height = h;
+      const ctx = cv.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+      let out;
+      try { out = cv.toDataURL("image/jpeg", 0.72); }
+      catch (_) { out = cv.toDataURL(); }
+      cb(out);
+    };
+    img.onerror = () => cb("");
+    img.src = e.target.result;
+  };
+  reader.onerror = () => cb("");
+  reader.readAsDataURL(file);
+}
+
+/* Mantenedor de una imagen: subir / cambiar / quitar, con vista previa */
+function ImgUpload({ label, value, onChange, shape = "rect", maxDim = 600, hint }) {
+  const [busy, setBusy] = React.useState(false);
+  const inputRef = React.useRef(null);
+  const pick = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setBusy(true);
+    comprimirImagen(file, maxDim, (data) => { setBusy(false); if (data) onChange(data); });
+    e.target.value = "";
+  };
+  return (
+    <div className="imgup">
+      <label className="lbl">{label}</label>
+      <div className="imgup-row">
+        <div className={`imgup-prev ${shape}`}>
+          {value ? <img src={value} alt={label} /> : <ImageIcon size={26} />}
+        </div>
+        <div className="imgup-actions">
+          <input ref={inputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={pick} />
+          <button type="button" className="btn-ghost sm" onClick={() => inputRef.current && inputRef.current.click()} disabled={busy}>
+            <Upload size={13} /> {busy ? "Procesando…" : (value ? "Cambiar" : "Subir")}
+          </button>
+          {value && <button type="button" className="btn-danger-ghost sm" onClick={() => onChange("")}><Trash2 size={13} /> Quitar</button>}
+          {hint && <span className="muted small">{hint}</span>}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 
@@ -546,6 +604,7 @@ async function rpcPiloto(p)            { const { error } = await supabase.rpc("g
 async function rpcAcr(a)               { const { error } = await supabase.rpc("gp3_upsert_acreditacion", { a }); if (error) throw error; }
 async function rpcAbono(ab)            { const { error } = await supabase.rpc("gp3_add_abono", { ab }); if (error) throw error; }
 async function rpcFecha(fid, est)      { const { error } = await supabase.rpc("gp3_set_fecha_estado", { fid, est }); if (error) throw error; }
+async function rpcFechasImg(imgs)       { const { error } = await supabase.rpc("gp3_set_fechas_img", { imgs }); if (error) throw error; }
 async function rpcResultados(resultados, log) { const { error } = await supabase.rpc("gp3_set_resultados", { resultados, log }); if (error) throw error; }
 async function rpcBorrarPiloto(pid)     { const { error } = await supabase.rpc("gp3_delete_piloto", { pid }); if (error) throw error; }
 
@@ -789,6 +848,7 @@ function PilotoHeader({ piloto }) {
         <div className="ph-photo">{foto ? <img src={foto} alt={nombreCompleto(piloto)} /> : <User size={40} />}</div>
         <div className="ph-dorsal">{piloto.dorsal}</div>
         <CampLogo campeonato={piloto.campeonato} size={26} />
+        {piloto.logoEquipo && <span className="ph-team-logo"><img src={piloto.logoEquipo} alt={piloto.equipo || "Equipo"} /></span>}
       </div>
       <div className="piloto-id">
         <h2>{nombreCompleto(piloto)}</h2>
@@ -1068,6 +1128,11 @@ function AcreditacionFlow({ db, persist }) {
   const nSinReg = pilotosFecha.filter((p) => !acrDe(p.id)).length;
   const pctAcr = nTotal ? Math.round((nAcr / nTotal) * 100) : 0;
 
+  const setTrazado = (fid, data) => {
+    const fechasImg = { ...(db.fechasImg || {}) };
+    if (data) fechasImg[fid] = data; else delete fechasImg[fid];
+    persist({ ...db, fechasImg }, () => rpcFechasImg(fechasImg));
+  };
   const toggleFecha = (fid) => {
     const cur = db.fechasEstado?.[fid] === "en_curso";
     const est = cur ? "cerrada" : "en_curso";
@@ -1110,7 +1175,7 @@ function AcreditacionFlow({ db, persist }) {
 
   return (
     <div className="staff">
-      <FechaMaintainer db={db} upcoming={upcoming} toggleFecha={toggleFecha} />
+      <FechaMaintainer db={db} upcoming={upcoming} toggleFecha={toggleFecha} setTrazado={setTrazado} />
 
       <div className="staff-bar">
         <div className="staff-fecha">
@@ -1125,6 +1190,13 @@ function AcreditacionFlow({ db, persist }) {
       </div>
 
       {db.fechasEstado?.[fechaId] !== "en_curso" && <div className="inline-warn"><Clock size={15} /> Esta fecha no está en curso. Inícialas en el mantenedor para habilitar la pre-acreditación de los pilotos.</div>}
+
+      {db.fechasImg?.[fechaId] && (
+        <div className="trazado-card">
+          <div className="trazado-head"><Map size={15} /> Trazado · {fecha?.circuito || fecha?.n}</div>
+          <img className="trazado-img" src={db.fechasImg[fechaId]} alt={`Trazado ${fecha?.n || ""}`} />
+        </div>
+      )}
 
       <div className="resumen-card">
         <div className="resumen-head">
@@ -1176,7 +1248,7 @@ function AcreditacionFlow({ db, persist }) {
   );
 }
 
-function FechaMaintainer({ db, upcoming, toggleFecha }) {
+function FechaMaintainer({ db, upcoming, toggleFecha, setTrazado }) {
   const [open, setOpen] = useState(false);
   const activas = upcoming.filter((f) => db.fechasEstado?.[f.id] === "en_curso").length;
   return (
@@ -1198,6 +1270,11 @@ function FechaMaintainer({ db, upcoming, toggleFecha }) {
                 <button className={`toggle ${on ? "on" : ""}`} onClick={() => toggleFecha(f.id)}>
                   {on ? <><Power size={13} /> En curso</> : <>Cerrada</>}
                 </button>
+                {setTrazado && (
+                  <div className="maint-trazado">
+                    <ImgUpload label="Trazado de la pista" value={db.fechasImg?.[f.id]} onChange={(v) => setTrazado(f.id, v)} shape="rect" maxDim={900} hint="Se muestra en la vista de la fecha" />
+                  </div>
+                )}
               </div>
             );
           })}
@@ -1213,6 +1290,13 @@ function StaffEditForm({ piloto, onSave, onCancel, db }) {
   return (
     <>
       <FichaFields data={f} edit db={db} onChange={campo} />
+      <div className="img-maint">
+        <h4 className="img-maint-h"><ImageIcon size={15} /> Imágenes del piloto</h4>
+        <div className="img-maint-grid">
+          <ImgUpload label="Foto del piloto" value={f.foto} onChange={(v) => campo("foto", v)} shape="round" maxDim={520} />
+          <ImgUpload label="Logo del equipo" value={f.logoEquipo} onChange={(v) => campo("logoEquipo", v)} shape="rect" maxDim={400} />
+        </div>
+      </div>
       <div className="panel-actions">
         <button className="btn-ghost" onClick={onCancel}><X size={14} /> Cancelar</button>
         <button className="btn-primary" onClick={() => onSave(f)}><Save size={15} /> Guardar y continuar al cobro</button>
@@ -1701,6 +1785,13 @@ function OrgPilotos({ db, persist }) {
         <div className="confirm-box">
           <h4>{editId === "__new__" ? "Nuevo piloto" : "Editar piloto"}</h4>
           <FichaFields data={f} edit db={db} onChange={campo} />
+          <div className="img-maint">
+            <h4 className="img-maint-h"><ImageIcon size={15} /> Imágenes del piloto</h4>
+            <div className="img-maint-grid">
+              <ImgUpload label="Foto del piloto" value={f.foto} onChange={(v) => campo("foto", v)} shape="round" maxDim={520} />
+              <ImgUpload label="Logo del equipo" value={f.logoEquipo} onChange={(v) => campo("logoEquipo", v)} shape="rect" maxDim={400} />
+            </div>
+          </div>
           <div className="panel-actions">
             {editId !== "__new__" && (confDel
               ? <><span className="del-warn"><AlertTriangle size={14} /> ¿Borrar a {nombreCompleto(f)} de forma permanente?</span>
@@ -2235,6 +2326,24 @@ select.inp{appearance:auto}
 .btn-danger-ghost{display:inline-flex;align-items:center;gap:6px;background:#fff;color:#DC2626;border:1px solid #F4B5B0;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:.88rem}
 .btn-danger-ghost:hover{background:#FDECEC}
 .del-warn{display:inline-flex;align-items:center;gap:6px;color:#B42318;font-size:.85rem;font-weight:600}
+.btn-ghost.sm,.btn-danger-ghost.sm{padding:5px 9px;font-size:.8rem}
+.img-maint{margin-top:14px;padding:14px;border:1px solid #E5E7EB;border-radius:10px;background:#FAFAFB}
+.img-maint-h{margin:0 0 10px;display:flex;align-items:center;gap:6px;color:#1a2d6e;font-size:.95rem}
+.img-maint-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.imgup .lbl{display:block;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase;color:#6B7280;margin-bottom:6px;font-weight:600}
+.imgup-row{display:flex;gap:12px;align-items:center}
+.imgup-prev{flex:0 0 auto;width:72px;height:72px;border:1px solid #D1D5DB;background:#fff;display:flex;align-items:center;justify-content:center;color:#9CA3AF;overflow:hidden;border-radius:10px}
+.imgup-prev.round{border-radius:50%}
+.imgup-prev img{width:100%;height:100%;object-fit:cover}
+.imgup-prev.rect img{object-fit:contain}
+.imgup-actions{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.ph-team-logo{display:inline-flex;align-items:center;height:26px;background:#fff;border-radius:6px;padding:2px 5px;border:1px solid #E5E7EB}
+.ph-team-logo img{height:100%;width:auto;object-fit:contain}
+.maint-trazado{flex-basis:100%;margin-top:8px}
+.trazado-card{margin:12px 0;border:1px solid #E5E7EB;border-radius:12px;overflow:hidden;background:#fff}
+.trazado-head{display:flex;align-items:center;gap:7px;padding:9px 12px;background:#1a2d6e;color:#fff;font-weight:600;font-size:.9rem}
+.trazado-img{display:block;width:100%;max-height:360px;object-fit:contain;background:#F3F4F6}
+@media(max-width:520px){.img-maint-grid{grid-template-columns:1fr}}
 
 .reject-msg{display:flex;gap:14px;align-items:flex-start;background:#FFF7F6;border:1px solid #F3C2C2;border-radius:12px;padding:16px;margin-top:8px}
 .reject-msg svg{color:var(--red);flex-shrink:0;margin-top:2px}
