@@ -104,19 +104,52 @@ function fotoDe(p) {
 }
 
 /* Comprime una imagen (redimensiona y exporta) para no inflar la base */
-/* Extrae el mayor JPEG incrustado en un archivo (sirve para RAW tipo .ARW/.CR2/.NEF,
-   que llevan una vista previa JPEG embebida). Busca segmentos SOI(FFD8)…EOI(FFD9). */
-function extraerJpegEmbebido(bytes) {
-  let start = -1, best = null, bestLen = 0;
-  for (let i = 0; i + 1 < bytes.length; i++) {
-    if (bytes[i] !== 0xFF) continue;
-    const m = bytes[i + 1];
-    if (m === 0xD8 && start === -1) start = i;
-    else if (m === 0xD9 && start !== -1) {
-      const len = i + 2 - start;
-      if (len > bestLen) { bestLen = len; best = bytes.slice(start, i + 2); }
-      start = -1;
+/* Recorre un JPEG desde el SOI en "i" respetando la longitud de cada segmento
+   (salta APP/EXIF, que pueden contener una miniatura JPEG anidada) y devuelve
+   el índice justo después del EOI real, o -1. */
+function finJpeg(bytes, i) {
+  let p = i + 2;
+  while (p + 1 < bytes.length) {
+    if (bytes[p] !== 0xFF) { p++; continue; }
+    let q = p + 1;
+    while (q < bytes.length && bytes[q] === 0xFF) q++;       // saltar bytes de relleno FF
+    const m = bytes[q];
+    if (m === 0xD9) return q + 1;                            // EOI real
+    if (m === 0x01 || (m >= 0xD0 && m <= 0xD7)) { p = q + 1; continue; } // sin longitud
+    if (q + 2 >= bytes.length) return -1;
+    const len = (bytes[q + 1] << 8) | bytes[q + 2];          // longitud del segmento (incluye los 2 bytes)
+    const next = q + 1 + len;
+    if (m === 0xDA) {                                        // SOS: datos comprimidos hasta el próximo marcador
+      let r = next;
+      while (r + 1 < bytes.length) {
+        if (bytes[r] === 0xFF) {
+          const mm = bytes[r + 1];
+          if (mm === 0x00 || (mm >= 0xD0 && mm <= 0xD7)) { r += 2; continue; } // relleno / RST
+          if (mm === 0xFF) { r++; continue; }
+          break;                                            // próximo marcador
+        }
+        r++;
+      }
+      p = r; continue;
     }
+    if (next <= q) return -1;
+    p = next;
+  }
+  return -1;
+}
+/* Extrae el mayor JPEG incrustado (vista previa de un RAW .ARW/.CR2/.NEF, etc.). */
+function extraerJpegEmbebido(bytes) {
+  let i = 0, best = null, bestLen = 0;
+  while (i + 1 < bytes.length) {
+    if (bytes[i] === 0xFF && bytes[i + 1] === 0xD8) {
+      const end = finJpeg(bytes, i);
+      if (end > 0) {
+        const len = end - i;
+        if (len > bestLen) { bestLen = len; best = bytes.slice(i, end); }
+        i = end; continue;                                  // saltar este JPEG completo
+      }
+    }
+    i++;
   }
   return (best && bestLen >= 2000) ? best : null;
 }
