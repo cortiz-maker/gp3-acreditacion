@@ -562,6 +562,41 @@ function folioNuevo(db) {
 }
 const esArg = (p) => p.pais === "Argentina";
 
+/* ---- Auto-gestión de Marca/Modelo de moto: lista desde la base + normalización ---- */
+const normKey = (x) => (x || "").toString().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+function levedist(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  const d = Array.from({ length: m + 1 }, (_, i) => { const r = new Array(n + 1).fill(0); r[0] = i; return r; });
+  for (let j = 1; j <= n; j++) d[0][j] = j;
+  for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++) {
+    const c = a[i - 1] === b[j - 1] ? 0 : 1;
+    d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + c);
+  }
+  return d[m][n];
+}
+/* Si lo escrito es igual o MUY parecido a un valor existente, devuelve el existente (canónico). */
+function canonizar(valor, existentes) {
+  const v = (valor || "").trim(); if (!v) return "";
+  const key = normKey(v); if (!key) return v;
+  let best = null, bestD = Infinity;
+  for (const e of existentes) {
+    const ek = normKey(e); if (!ek) continue;
+    if (ek === key) return e;                 // coincidencia exacta (ignora may/tildes/espacios)
+    const dd = levedist(key, ek);
+    if (dd < bestD) { bestD = dd; best = e; }
+  }
+  const thr = key.length <= 4 ? 0 : (key.length <= 8 ? 1 : 2);  // tolerancia según largo
+  if (best && bestD <= thr) return best;
+  return v;                                    // nuevo: se agrega tal cual
+}
+const marcasDe = (db) => Array.from(new Set((db?.pilotos || []).map((p) => (p.marcaMoto || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "es"));
+const modelosDe = (db, marca) => {
+  const mk = normKey(marca);
+  const rows = (db?.pilotos || []).filter((p) => !mk || normKey(p.marcaMoto) === mk);
+  return Array.from(new Set(rows.map((p) => (p.modeloMoto || "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b, "es"));
+};
+
 /* ============================================================ */
 export default function App() {
   const [db, setDb] = useState(null);
@@ -1053,7 +1088,9 @@ function AcreditacionFlow({ db, persist }) {
     setPase({ reg, piloto, fecha });
   };
   const guardarEdicion = (data) => {
-    const np = { ...data, estadoFicha: "confirmada" };
+    const marcaC = canonizar(data.marcaMoto, marcasDe(db));
+    const modeloC = canonizar(data.modeloMoto, modelosDe(db, marcaC));
+    const np = { ...data, marcaMoto: marcaC, modeloMoto: modeloC, estadoFicha: "confirmada" };
     persist({ ...db, pilotos: db.pilotos.map((p) => (p.id === data.id ? np : p)) }, () => rpcPiloto(np));
     setEditPiloto(null);
     setCobrando(np); // Paso 2: cobro / abono
@@ -1065,7 +1102,7 @@ function AcreditacionFlow({ db, persist }) {
       <div className="panel-head"><h3>Paso 1 · Editar ficha · {nombreCompleto(editPiloto)}</h3><button className="btn-ghost" onClick={() => setEditPiloto(null)}><X size={14} /> Cancelar</button></div>
       <div className="info-bar"><ClipboardCheck size={15} /> Revisa y completa los datos del piloto. Al guardar pasarás al cobro y luego a la emisión del pase.</div>
       {editPiloto.estadoFicha === "rechazada" && <div className="inline-warn"><AlertTriangle size={15} /> El piloto reportó un error en su ficha — corrígelo antes de continuar.</div>}
-      <StaffEditForm piloto={editPiloto} onSave={guardarEdicion} onCancel={() => setEditPiloto(null)} />
+      <StaffEditForm piloto={editPiloto} onSave={guardarEdicion} onCancel={() => setEditPiloto(null)} db={db} />
     </div>
   );
 
@@ -1168,12 +1205,12 @@ function FechaMaintainer({ db, upcoming, toggleFecha }) {
   );
 }
 
-function StaffEditForm({ piloto, onSave, onCancel }) {
+function StaffEditForm({ piloto, onSave, onCancel, db }) {
   const [f, setF] = useState(piloto);
   const campo = (k, v) => setF((s) => aplicarAuto(s, k, v));
   return (
     <>
-      <FichaFields data={f} edit onChange={campo} />
+      <FichaFields data={f} edit db={db} onChange={campo} />
       <div className="panel-actions">
         <button className="btn-ghost" onClick={onCancel}><X size={14} /> Cancelar</button>
         <button className="btn-primary" onClick={() => onSave(f)}><Save size={15} /> Guardar y continuar al cobro</button>
@@ -1486,7 +1523,10 @@ function OrgPilotos({ db, persist }) {
   const nuevo = () => { setEditId("__new__"); setF(vacio); setConfDel(false); };
   const guardar = () => {
     if (!f.nombres || !f.dni) return;
-    const np = editId === "__new__" ? { ...f, id: `p${Date.now()}` } : f;
+    const marcaC = canonizar(f.marcaMoto, marcasDe(db));
+    const modeloC = canonizar(f.modeloMoto, modelosDe(db, marcaC));
+    const base = { ...f, marcaMoto: marcaC, modeloMoto: modeloC };
+    const np = editId === "__new__" ? { ...base, id: `p${Date.now()}` } : base;
     const pilotos = editId === "__new__" ? [...db.pilotos, np] : db.pilotos.map((p) => (p.id === editId ? np : p));
     persist({ ...db, pilotos }, () => rpcPiloto(np)); setEditId(null);
   };
@@ -1657,7 +1697,7 @@ function OrgPilotos({ db, persist }) {
       {editId && (
         <div className="confirm-box">
           <h4>{editId === "__new__" ? "Nuevo piloto" : "Editar piloto"}</h4>
-          <FichaFields data={f} edit onChange={campo} />
+          <FichaFields data={f} edit db={db} onChange={campo} />
           <div className="panel-actions">
             {editId !== "__new__" && (confDel
               ? <><span className="del-warn"><AlertTriangle size={14} /> ¿Borrar a {nombreCompleto(f)} de forma permanente?</span>
@@ -1945,7 +1985,7 @@ function RankingTable({ data, resaltar }) {
 /* ============================================================
    Campos reutilizables
    ============================================================ */
-function FichaFields({ data, edit, onChange }) {
+function FichaFields({ data, edit, onChange, db }) {
   const ar = esArg(data);
   const visibles = FICHA_FIELDS.filter((f) => !f.arOnly || ar);
   return (
@@ -1962,6 +2002,10 @@ function FichaFields({ data, edit, onChange }) {
                   ? <select className="inp" value={val ?? ""} onChange={(e) => onChange("provincia", e.target.value)}><option value="">— Selecciona provincia —</option>{PROVINCIAS_AR.map((o) => <option key={o} value={o}>{o}</option>)}</select>
                   : f.k === "localidad"
                   ? <><input className="inp" list="ar-localidades" value={val ?? ""} placeholder={data.provincia ? "Selecciona o escribe la localidad" : "Elige primero la provincia"} onChange={(e) => onChange("localidad", e.target.value)} /><datalist id="ar-localidades">{(LOCALIDADES_AR[data.provincia] || []).map((o) => <option key={o} value={o} />)}</datalist></>
+                  : f.k === "marcaMoto"
+                  ? <><input className="inp" list="moto-marcas" value={val ?? ""} placeholder="Selecciona o escribe la marca" onChange={(e) => onChange("marcaMoto", e.target.value)} /><datalist id="moto-marcas">{marcasDe(db).map((o) => <option key={o} value={o} />)}</datalist></>
+                  : f.k === "modeloMoto"
+                  ? <><input className="inp" list="moto-modelos" value={val ?? ""} placeholder={data.marcaMoto ? "Selecciona o escribe el modelo" : "Elige primero la marca"} onChange={(e) => onChange("modeloMoto", e.target.value)} /><datalist id="moto-modelos">{modelosDe(db, data.marcaMoto).map((o) => <option key={o} value={o} />)}</datalist></>
                   : f.type === "select"
                   ? <select className="inp" value={val ?? ""} onChange={(e) => onChange(f.k, e.target.value)}>{f.opts.map((o) => <option key={o} value={o}>{o}</option>)}</select>
                   : <input className="inp" type={f.type === "date" ? "date" : "text"} value={val ?? ""} onChange={(e) => onChange(f.k, e.target.value)} />}
