@@ -130,15 +130,66 @@ function comprimirImagen(file, maxDim, cb) {
   reader.readAsDataURL(file);
 }
 
+/* Recorta un retrato (3:4) encuadrando de la cintura hacia arriba.
+   Usa detección de rostro del navegador si está disponible; si no, recorte centrado. */
+async function recortarRetrato(img) {
+  const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
+  const AR = 3 / 4;
+  let cx = W / 2, faceTop = null, faceH = null;
+  if (typeof window !== "undefined" && window.FaceDetector) {
+    try {
+      const fd = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
+      const faces = await fd.detect(img);
+      if (faces && faces[0] && faces[0].boundingBox) {
+        const b = faces[0].boundingBox; cx = b.x + b.width / 2; faceTop = b.y; faceH = b.height;
+      }
+    } catch (_) {}
+  }
+  let cropW, cropH, sx, sy;
+  if (faceTop != null && faceH) {
+    const top = Math.max(0, faceTop - faceH * 0.7);
+    const bottom = Math.min(H, faceTop + faceH * 5.2);
+    cropH = bottom - top; cropW = cropH * AR;
+    if (cropW > W) { cropW = W; cropH = cropW / AR; }
+    sx = Math.max(0, Math.min(W - cropW, cx - cropW / 2));
+    sy = Math.max(0, Math.min(H - cropH, top));
+  } else {
+    if (W / H > AR) { cropH = H; cropW = H * AR; } else { cropW = W; cropH = W / AR; }
+    sx = (W - cropW) / 2;
+    sy = Math.max(0, Math.min(H - cropH, H * 0.05));
+  }
+  const OUTW = 600, OUTH = Math.round(OUTW / AR);
+  const cv = document.createElement("canvas"); cv.width = OUTW; cv.height = OUTH;
+  cv.getContext("2d").drawImage(img, sx, sy, cropW, cropH, 0, 0, OUTW, OUTH);
+  try { return cv.toDataURL("image/jpeg", 0.78); } catch (_) { return cv.toDataURL(); }
+}
+function enmarcarPiloto(file, cb) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = async () => { try { cb(await recortarRetrato(img)); } catch (_) { cb(""); } };
+    img.onerror = () => cb("");
+    img.src = e.target.result;
+  };
+  reader.onerror = () => cb("");
+  reader.readAsDataURL(file);
+}
+
 /* Mantenedor de una imagen: subir / cambiar / quitar, con vista previa */
-function ImgUpload({ label, value, onChange, shape = "rect", maxDim = 600, hint }) {
+function ImgUpload({ label, value, onChange, shape = "rect", maxDim = 600, hint, frame = false }) {
   const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState("");
   const inputRef = React.useRef(null);
   const pick = (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
-    setBusy(true);
-    comprimirImagen(file, maxDim, (data) => { setBusy(false); if (data) onChange(data); });
+    setBusy(true); setErr("");
+    const done = (data) => {
+      setBusy(false);
+      if (data) onChange(data);
+      else setErr("No se pudo procesar la imagen. Prueba con un archivo JPG o PNG (las fotos HEIC del iPhone no siempre se pueden leer).");
+    };
+    if (frame) enmarcarPiloto(file, done); else comprimirImagen(file, maxDim, done);
     e.target.value = "";
   };
   return (
@@ -155,6 +206,7 @@ function ImgUpload({ label, value, onChange, shape = "rect", maxDim = 600, hint 
           </button>
           {value && <button type="button" className="btn-danger-ghost sm" onClick={() => onChange("")}><Trash2 size={13} /> Quitar</button>}
           {hint && <span className="muted small">{hint}</span>}
+          {err && <span className="muted small" style={{ color: "#B42318" }}>{err}</span>}
         </div>
       </div>
     </div>
@@ -1425,7 +1477,7 @@ function StaffEditForm({ piloto, onSave, onCancel, db }) {
       <div className="img-maint">
         <h4 className="img-maint-h"><ImageIcon size={15} /> Imágenes del piloto</h4>
         <div className="img-maint-grid">
-          <ImgUpload label="Foto del piloto" value={f.foto} onChange={(v) => campo("foto", v)} shape="round" maxDim={520} />
+          <ImgUpload label="Foto del piloto" value={f.foto} onChange={(v) => campo("foto", v)} shape="round" frame hint="Se encuadra de la cintura hacia arriba" />
           <ImgUpload label="Logo del equipo" value={f.logoEquipo} onChange={(v) => campo("logoEquipo", v)} shape="rect" maxDim={400} />
         </div>
       </div>
@@ -1897,7 +1949,7 @@ function OrgPilotos({ db, persist }) {
       <div className="img-maint">
         <h4 className="img-maint-h"><ImageIcon size={15} /> Imágenes del piloto</h4>
         <div className="img-maint-grid">
-          <ImgUpload label="Foto del piloto" value={f.foto} onChange={(v) => campo("foto", v)} shape="round" maxDim={520} />
+          <ImgUpload label="Foto del piloto" value={f.foto} onChange={(v) => campo("foto", v)} shape="round" frame hint="Se encuadra de la cintura hacia arriba" />
           <ImgUpload label="Logo del equipo" value={f.logoEquipo} onChange={(v) => campo("logoEquipo", v)} shape="rect" maxDim={400} />
         </div>
       </div>
@@ -1985,7 +2037,7 @@ function OrgPilotos({ db, persist }) {
           <div className="img-maint">
             <h4 className="img-maint-h"><ImageIcon size={15} /> Imágenes del piloto</h4>
             <div className="img-maint-grid">
-              <ImgUpload label="Foto del piloto" value={f.foto} onChange={(v) => campo("foto", v)} shape="round" maxDim={520} />
+              <ImgUpload label="Foto del piloto" value={f.foto} onChange={(v) => campo("foto", v)} shape="round" frame hint="Se encuadra de la cintura hacia arriba" />
               <ImgUpload label="Logo del equipo" value={f.logoEquipo} onChange={(v) => campo("logoEquipo", v)} shape="rect" maxDim={400} />
             </div>
           </div>
