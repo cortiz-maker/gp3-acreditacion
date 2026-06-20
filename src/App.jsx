@@ -1,4 +1,4 @@
-aimport React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Flag, ChevronRight, User, Users, Calendar, Trophy, ClipboardCheck,
   Printer, Search, Plus, Check, X, ShieldCheck, Bike, MapPin,
@@ -1001,7 +1001,7 @@ function PilotoPreacred({ db, persist, piloto }) {
         </Modal>
       )}
       {aviso && aviso.modo === "trazado" && (
-        <TrazadoModal fecha={aviso} campeonato={piloto.campeonato} onClose={() => setAviso(null)} />
+        <TrazadoModal fecha={aviso} campeonato={piloto.campeonato} img={db?.fechasImg?.[aviso.id]} onClose={() => setAviso(null)} />
       )}
     </div>
   );
@@ -1537,7 +1537,7 @@ function OrgFlow({ db, persist }) {
         {tabs.map((t) => (<button key={t.id} className={`subnav-btn ${tab === t.id ? "on" : ""}`} onClick={() => setTab(t.id)}>{t.icon}<span>{t.label}</span></button>))}
       </nav>
       {tab === "pilotos" && <OrgPilotos db={db} persist={persist} />}
-      {tab === "calendario" && <OrgCalendario />}
+      {tab === "calendario" && <OrgCalendario db={db} />}
       {tab === "puntajes" && <OrgPuntajes db={db} persist={persist} onLock={() => setTab("pilotos")} />}
     </div>
   );
@@ -2001,7 +2001,7 @@ function OrgPuntajes({ db, persist, onLock }) {
   );
 }
 
-function OrgCalendario() {
+function OrgCalendario({ db }) {
   const [trazado, setTrazado] = useState(null);
   return (
     <div className="panel">
@@ -2022,7 +2022,7 @@ function OrgCalendario() {
           </div>
         </div>
       ))}
-      {trazado && <TrazadoModal fecha={trazado} campeonato={trazado.campeonato} onClose={() => setTrazado(null)} />}
+      {trazado && <TrazadoModal fecha={trazado} campeonato={trazado.campeonato} img={db?.fechasImg?.[trazado.id]} onClose={() => setTrazado(null)} />}
     </div>
   );
 }
@@ -2064,17 +2064,19 @@ function buildTrazadoSVG(fecha, campeonato) {
 </svg>`;
 }
 
-function TrazadoModal({ fecha, campeonato, onClose }) {
+function TrazadoModal({ fecha, campeonato, img, onClose }) {
   const svg = buildTrazadoSVG(fecha, campeonato);
   const print = () => { document.body.classList.add("printing-traz"); window.print(); setTimeout(() => document.body.classList.remove("printing-traz"), 400); };
+  const base = `trazado-${(fecha.circuito || "circuito").replace(/\s+/g, "_")}-${(fecha.n || "").replace(/\s+/g, "")}`;
   const descargar = () => {
     try {
-      const blob = new Blob([svg], { type: "image/svg+xml" });
-      const url = URL.createObjectURL(blob);
+      let url, name, revoke = false;
+      if (img) { url = img; name = base + ".jpg"; }
+      else { const blob = new Blob([svg], { type: "image/svg+xml" }); url = URL.createObjectURL(blob); name = base + ".svg"; revoke = true; }
       const a = document.createElement("a");
-      a.href = url; a.download = `trazado-${fecha.circuito.replace(/\s+/g, "_")}-${fecha.n.replace(/\s+/g, "")}.svg`;
+      a.href = url; a.download = name;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      if (revoke) setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) { alert("Si la descarga no inicia, usa Imprimir → Guardar como PDF."); }
   };
   return (
@@ -2083,12 +2085,19 @@ function TrazadoModal({ fecha, campeonato, onClose }) {
         <div className="modal-bar no-print">
           <b><Map size={16} /> Trazado del circuito</b>
           <div className="modal-actions">
-            <button className="btn-outline sm" onClick={descargar}><Download size={14} /> SVG</button>
+            <button className="btn-outline sm" onClick={descargar}><Download size={14} /> {img ? "Descargar" : "SVG"}</button>
             <button className="btn-primary sm" onClick={print}><Printer size={14} /> Imprimir</button>
             <button className="btn-ghost sm" onClick={onClose}><X size={15} /></button>
           </div>
         </div>
-        <div className="traz-print-root" dangerouslySetInnerHTML={{ __html: svg }} />
+        {img ? (
+          <div className="traz-print-root traz-img-root">
+            <div className="traz-img-head"><span className="traz-img-camp">{campeonato}</span><b>{fecha.circuito}</b><span className="traz-img-fecha">{fecha.n} · {fecha.txt}</span></div>
+            <img className="traz-img-full" src={img} alt={`Trazado ${fecha.circuito}`} />
+          </div>
+        ) : (
+          <div className="traz-print-root" dangerouslySetInnerHTML={{ __html: svg }} />
+        )}
       </div>
     </div>
   );
@@ -2412,12 +2421,18 @@ select.inp{appearance:auto}
 .imgup-prev img{width:100%;height:100%;object-fit:cover}
 .imgup-prev.rect img{object-fit:contain}
 .imgup-actions{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
-.ph-team-logo{display:inline-flex;align-items:center;height:26px;background:#fff;border-radius:6px;padding:2px 5px;border:1px solid #E5E7EB}
-.ph-team-logo img{height:100%;width:auto;object-fit:contain}
+.ph-team-logo{display:inline-flex;align-items:center;height:32px;border-radius:8px;overflow:hidden;flex-shrink:0}
+.ph-team-logo img{height:32px;width:auto;display:block;object-fit:contain}
 .maint-trazado{flex-basis:100%;margin-top:8px}
 .trazado-card{margin:12px 0;border:1px solid #E5E7EB;border-radius:12px;overflow:hidden;background:#fff}
 .trazado-head{display:flex;align-items:center;gap:7px;padding:9px 12px;background:#1a2d6e;color:#fff;font-weight:600;font-size:.9rem}
 .trazado-img{display:block;width:100%;max-height:360px;object-fit:contain;background:#F3F4F6}
+.traz-img-root{background:#fff;padding:0 0 8px}
+.traz-img-head{padding:14px 18px 10px;display:flex;flex-direction:column;gap:2px}
+.traz-img-head .traz-img-camp{font-size:.78rem;color:#6A7282}
+.traz-img-head b{font-family:var(--disp);font-size:1.4rem;color:#16171D}
+.traz-img-head .traz-img-fecha{font-size:.85rem;color:#E11D2A;font-weight:700}
+.traz-img-full{display:block;width:100%;max-height:62vh;object-fit:contain;background:#F3F4F6}
 @media(max-width:520px){.img-maint-grid{grid-template-columns:1fr}}
 .bulk-controls{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:10px}
 .bulk-info{max-width:640px}
