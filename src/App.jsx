@@ -674,11 +674,13 @@ const modelosDe = (db, marca) => {
 };
 
 /* ============================================================ */
+const STAFF_PIN = "1507";
 const PILOTO_LINK = (() => { try { const sp = new URLSearchParams(window.location.search); return sp.has("piloto") || (window.location.hash || "").toLowerCase().includes("piloto"); } catch (e) { return false; } })();
 
 export default function App() {
   const [db, setDb] = useState(null);
   const [rol, setRol] = useState(PILOTO_LINK ? "piloto" : null);
+  const [staffOk, setStaffOk] = useState(() => { try { return sessionStorage.getItem("gp3-staff") === "1"; } catch (e) { return false; } });
   const [saveErr, setSaveErr] = useState(null);
   const dirty = useRef(false);
 
@@ -729,11 +731,38 @@ export default function App() {
         </div>
       )}
       <main className="gp3-main">
-        {!rol && <Landing onPick={setRol} />}
-        {rol === "acreditacion" && <AcreditacionFlow db={db} persist={persist} />}
-        {rol === "org" && <OrgFlow db={db} persist={persist} />}
-        {rol === "piloto" && <PilotoFlow db={db} persist={persist} />}
+        {rol === "piloto" ? (
+          <PilotoFlow db={db} persist={persist} />
+        ) : !staffOk ? (
+          <StaffGate onOk={() => { try { sessionStorage.setItem("gp3-staff", "1"); } catch (e) {} setStaffOk(true); }} />
+        ) : (
+          <>
+            {!rol && <Landing onPick={setRol} />}
+            {rol === "acreditacion" && <AcreditacionFlow db={db} persist={persist} />}
+            {rol === "org" && <OrgFlow db={db} persist={persist} />}
+          </>
+        )}
       </main>
+    </div>
+  );
+}
+
+function StaffGate({ onOk }) {
+  const [pin, setPin] = useState("");
+  const [err, setErr] = useState("");
+  const go = () => { if (pin === STAFF_PIN) { setErr(""); onOk(); } else setErr("PIN incorrecto. Intenta nuevamente."); };
+  return (
+    <div className="login-wrap">
+      <div className="login-card">
+        <img src={LOGO_GP3_BLACK} alt="GP3 Sports LATAM" style={{ height: 50, margin: "0 auto 8px", display: "block" }} />
+        <span className="eyebrow">Acceso restringido</span>
+        <h2>Ingresa tu PIN</h2>
+        <p className="muted">Panel de administración GP3 Sports.</p>
+        <input className="inp" inputMode="numeric" maxLength={4} placeholder="••••" value={pin} autoFocus
+          onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))} onKeyDown={(e) => e.key === "Enter" && go()} />
+        {err && <div className="alert">{err}</div>}
+        <button className="btn-primary full" onClick={go}>Entrar <ChevronRight size={16} /></button>
+      </div>
     </div>
   );
 }
