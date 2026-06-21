@@ -297,10 +297,78 @@ async function recortarRetrato(img) {
   cv.getContext("2d").drawImage(img, sx, sy, cropW, cropH, 0, 0, OUTW, OUTH);
   try { return cv.toDataURL("image/jpeg", 0.78); } catch (_) { return cv.toDataURL(); }
 }
+/* IA: segmentación de persona (MediaPipe Tasks). Se carga bajo demanda desde CDN. */
+let _segPromise = null;
+function cargarSegmentador() {
+  if (_segPromise) return _segPromise;
+  const base = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+  _segPromise = (async () => {
+    const vision = await import(/* @vite-ignore */ (base + "/vision_bundle.mjs"));
+    const fileset = await vision.FilesetResolver.forVisionTasks(base + "/wasm");
+    return await vision.ImageSegmenter.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite" },
+      runningMode: "IMAGE", outputCategoryMask: true, outputConfidenceMasks: false,
+    });
+  })().catch((e) => { _segPromise = null; throw e; });
+  return _segPromise;
+}
+/* Recorta cintura-arriba anclado a la persona detectada y deja el fondo en negro. */
+async function segmentarYRecortar(src, fondoNegro) {
+  const seg = await cargarSegmentador();
+  const W = src.naturalWidth || src.width, H = src.naturalHeight || src.height;
+  const work = document.createElement("canvas"); work.width = W; work.height = H;
+  work.getContext("2d").drawImage(src, 0, 0, W, H);
+  const res = seg.segment(work);
+  const mask = res.categoryMask;
+  const mw = mask.width, mh = mask.height;
+  const cat = mask.getAsUint8Array();
+  let cntPos = 0; for (let i = 0; i < cat.length; i++) if (cat[i] > 0) cntPos++;
+  const invert = cntPos > cat.length * 0.85;
+  const esPersona = (v) => invert ? v === 0 : v > 0;
+  let minX = mw, minY = mh, maxX = -1, maxY = -1, count = 0;
+  for (let y = 0; y < mh; y++) for (let x = 0; x < mw; x++) {
+    if (esPersona(cat[y * mw + x])) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; count++; }
+  }
+  if (count < mw * mh * 0.02) { mask.close && mask.close(); res.close && res.close(); throw new Error("sin persona"); }
+  const sxr = W / mw, syr = H / mh;
+  const pL = minX * sxr, pR = (maxX + 1) * sxr, pT = minY * syr, pB = (maxY + 1) * syr;
+  const pH = pB - pT, pW = pR - pL, cxP = (pL + pR) / 2;
+  const AR = 3 / 4;
+  const cropTop = Math.max(0, pT - pH * 0.10);
+  const waist = pT + pH * 0.62;
+  const cropBottom = Math.min(H, Math.max(waist, pT + pH * 0.45));
+  let cropH = cropBottom - cropTop, cropW = cropH * AR;
+  if (cropW < pW * 1.08) { cropW = pW * 1.08; cropH = cropW / AR; }
+  if (cropW > W) { cropW = W; cropH = cropW / AR; }
+  if (cropH > H) { cropH = H; cropW = cropH * AR; }
+  const sx = Math.max(0, Math.min(W - cropW, cxP - cropW / 2));
+  const sy = Math.max(0, Math.min(H - cropH, cropTop));
+  let drawSrc = src;
+  if (fondoNegro) {
+    const small = document.createElement("canvas"); small.width = mw; small.height = mh;
+    const sctx = small.getContext("2d"); const id = sctx.createImageData(mw, mh);
+    for (let i = 0; i < cat.length; i++) { const a = esPersona(cat[i]) ? 255 : 0; id.data[i * 4] = 255; id.data[i * 4 + 1] = 255; id.data[i * 4 + 2] = 255; id.data[i * 4 + 3] = a; }
+    sctx.putImageData(id, 0, 0);
+    const maskBig = document.createElement("canvas"); maskBig.width = W; maskBig.height = H;
+    const mctx = maskBig.getContext("2d"); mctx.imageSmoothingEnabled = true; mctx.drawImage(small, 0, 0, W, H);
+    const person = document.createElement("canvas"); person.width = W; person.height = H;
+    const pctx = person.getContext("2d"); pctx.drawImage(src, 0, 0, W, H);
+    pctx.globalCompositeOperation = "destination-in"; pctx.drawImage(maskBig, 0, 0); pctx.globalCompositeOperation = "source-over";
+    drawSrc = person;
+  }
+  mask.close && mask.close(); res.close && res.close();
+  const OUTW = 600, OUTH = Math.round(OUTW / AR);
+  const out = document.createElement("canvas"); out.width = OUTW; out.height = OUTH;
+  const octx = out.getContext("2d");
+  if (fondoNegro) { octx.fillStyle = "#000"; octx.fillRect(0, 0, OUTW, OUTH); }
+  octx.drawImage(drawSrc, sx, sy, cropW, cropH, 0, 0, OUTW, OUTH);
+  try { return out.toDataURL("image/jpeg", 0.82); } catch (_) { return out.toDataURL(); }
+}
 function enmarcarPiloto(file, cb) {
   archivoAImagen(file, async (img) => {
     if (!img) { cb(""); return; }
-    try { cb(await recortarRetrato(img)); } catch (_) { cb(""); }
+    try { cb(await segmentarYRecortar(img, true)); }
+    catch (_) { try { cb(await recortarRetrato(img)); } catch (__) { cb(""); } }
   });
 }
 
@@ -1606,7 +1674,7 @@ function StaffEditForm({ piloto, onSave, onCancel, db }) {
       <div className="img-maint">
         <h4 className="img-maint-h"><ImageIcon size={15} /> Imágenes del piloto</h4>
         <div className="img-maint-grid">
-          <ImgUpload label="Foto del piloto" value={f.foto} onChange={(v) => campo("foto", v)} shape="round" frame hint="Se encuadra de la cintura hacia arriba" />
+          <ImgUpload label="Foto del piloto" value={f.foto} onChange={(v) => campo("foto", v)} shape="round" frame hint="Recorte con IA (cintura arriba) y fondo negro" />
           <ImgUpload label="Logo del equipo" value={f.logoEquipo} onChange={(v) => campo("logoEquipo", v)} shape="rect" maxDim={400} />
         </div>
       </div>
@@ -2078,7 +2146,7 @@ function OrgPilotos({ db, persist }) {
       <div className="img-maint">
         <h4 className="img-maint-h"><ImageIcon size={15} /> Imágenes del piloto</h4>
         <div className="img-maint-grid">
-          <ImgUpload label="Foto del piloto" value={f.foto} onChange={(v) => campo("foto", v)} shape="round" frame hint="Se encuadra de la cintura hacia arriba" />
+          <ImgUpload label="Foto del piloto" value={f.foto} onChange={(v) => campo("foto", v)} shape="round" frame hint="Recorte con IA (cintura arriba) y fondo negro" />
           <ImgUpload label="Logo del equipo" value={f.logoEquipo} onChange={(v) => campo("logoEquipo", v)} shape="rect" maxDim={400} />
         </div>
       </div>
@@ -2166,7 +2234,7 @@ function OrgPilotos({ db, persist }) {
           <div className="img-maint">
             <h4 className="img-maint-h"><ImageIcon size={15} /> Imágenes del piloto</h4>
             <div className="img-maint-grid">
-              <ImgUpload label="Foto del piloto" value={f.foto} onChange={(v) => campo("foto", v)} shape="round" frame hint="Se encuadra de la cintura hacia arriba" />
+              <ImgUpload label="Foto del piloto" value={f.foto} onChange={(v) => campo("foto", v)} shape="round" frame hint="Recorte con IA (cintura arriba) y fondo negro" />
               <ImgUpload label="Logo del equipo" value={f.logoEquipo} onChange={(v) => campo("logoEquipo", v)} shape="rect" maxDim={400} />
             </div>
           </div>
