@@ -153,27 +153,83 @@ function extraerJpegEmbebido(bytes) {
   }
   return (best && bestLen >= 2000) ? best : null;
 }
-/* Carga un archivo de imagen como <img>. Si el navegador no lo decodifica (RAW),
-   intenta usar el JPEG de vista previa embebido. Devuelve null si no se puede. */
+/* Lee la orientación EXIF (1..8) de un JPEG; 1 si no hay. */
+function leerOrientacionExif(bytes) {
+  if (!bytes || bytes[0] !== 0xFF || bytes[1] !== 0xD8) return 1;
+  let p = 2;
+  while (p + 4 < bytes.length) {
+    if (bytes[p] !== 0xFF) { p++; continue; }
+    const marker = bytes[p + 1];
+    if (marker === 0xD9 || marker === 0xDA) break;
+    if (marker >= 0xD0 && marker <= 0xD7) { p += 2; continue; }
+    const len = (bytes[p + 2] << 8) | bytes[p + 3];
+    if (marker === 0xE1 && bytes[p + 4] === 0x45 && bytes[p + 5] === 0x78 && bytes[p + 6] === 0x69 && bytes[p + 7] === 0x66) {
+      const tiff = p + 10; // tras "Exif\0\0"
+      const little = bytes[tiff] === 0x49 && bytes[tiff + 1] === 0x49;
+      const u16 = (o) => little ? (bytes[o] | (bytes[o + 1] << 8)) : ((bytes[o] << 8) | bytes[o + 1]);
+      const u32 = (o) => (little ? (bytes[o] | (bytes[o + 1] << 8) | (bytes[o + 2] << 16) | (bytes[o + 3] << 24)) : ((bytes[o] << 24) | (bytes[o + 1] << 16) | (bytes[o + 2] << 8) | bytes[o + 3])) >>> 0;
+      const ifd0 = tiff + u32(tiff + 4);
+      const n = u16(ifd0);
+      for (let i = 0; i < n; i++) { const e = ifd0 + 2 + i * 12; if (u16(e) === 0x0112) return u16(e + 8) || 1; }
+      return 1;
+    }
+    p += 2 + len;
+  }
+  return 1;
+}
+/* Devuelve un canvas con la imagen ya rotada/espejada según la orientación EXIF. */
+function orientarCanvas(src, w, h, orient) {
+  const swap = orient >= 5 && orient <= 8;
+  const cv = document.createElement("canvas");
+  cv.width = swap ? h : w; cv.height = swap ? w : h;
+  const ctx = cv.getContext("2d");
+  switch (orient) {
+    case 2: ctx.transform(-1, 0, 0, 1, w, 0); break;
+    case 3: ctx.transform(-1, 0, 0, -1, w, h); break;
+    case 4: ctx.transform(1, 0, 0, -1, 0, h); break;
+    case 5: ctx.transform(0, 1, 1, 0, 0, 0); break;
+    case 6: ctx.transform(0, 1, -1, 0, h, 0); break;
+    case 7: ctx.transform(0, -1, -1, 0, h, w); break;
+    case 8: ctx.transform(0, -1, 1, 0, 0, w); break;
+    default: break;
+  }
+  ctx.drawImage(src, 0, 0);
+  return cv;
+}
+/* Carga un archivo como imagen YA ORIENTADA. Soporta RAW (.ARW…) vía su JPEG embebido.
+   Prefiere createImageBitmap({imageOrientation:'from-image'}); si no, aplica EXIF a mano. */
 function archivoAImagen(file, cb) {
-  const url = URL.createObjectURL(file);
-  const img = new Image();
-  img.onload = () => { cb(img); setTimeout(() => URL.revokeObjectURL(url), 1500); };
-  img.onerror = () => {
-    URL.revokeObjectURL(url);
-    const fin = (buf) => {
-      const jpg = extraerJpegEmbebido(new Uint8Array(buf));
-      if (!jpg) { cb(null); return; }
-      const u2 = URL.createObjectURL(new Blob([jpg], { type: "image/jpeg" }));
-      const i2 = new Image();
-      i2.onload = () => { cb(i2); setTimeout(() => URL.revokeObjectURL(u2), 1500); };
-      i2.onerror = () => { URL.revokeObjectURL(u2); cb(null); };
-      i2.src = u2;
+  const tieneCIB = typeof createImageBitmap === "function";
+  const imgPath = (blob, ob) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const o = ob ? leerOrientacionExif(ob) : 1;
+      const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
+      cb(o === 1 ? img : orientarCanvas(img, W, H, o));
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
     };
-    if (file.arrayBuffer) file.arrayBuffer().then(fin).catch(() => cb(null));
-    else { const r = new FileReader(); r.onload = (e) => fin(e.target.result); r.onerror = () => cb(null); r.readAsArrayBuffer(file); }
+    img.onerror = () => { URL.revokeObjectURL(url); cb(null); };
+    img.src = url;
   };
-  img.src = url;
+  const desdeBlob = (blob, ob) => {
+    if (tieneCIB) createImageBitmap(blob, { imageOrientation: "from-image" }).then((b) => cb(b)).catch(() => imgPath(blob, ob));
+    else imgPath(blob, ob);
+  };
+  const leerBuf = file.arrayBuffer ? file.arrayBuffer() : new Promise((res, rej) => { const r = new FileReader(); r.onload = (e) => res(e.target.result); r.onerror = rej; r.readAsArrayBuffer(file); });
+  leerBuf.then((buf) => {
+    const bytes = new Uint8Array(buf);
+    const raw = () => { const jpg = extraerJpegEmbebido(bytes); if (!jpg) { cb(null); return; } desdeBlob(new Blob([jpg], { type: "image/jpeg" }), jpg); };
+    if (tieneCIB) {
+      createImageBitmap(file, { imageOrientation: "from-image" }).then((b) => cb(b)).catch(raw);
+    } else {
+      const url = URL.createObjectURL(file);
+      const t = new Image();
+      t.onload = () => { URL.revokeObjectURL(url); imgPath(file, bytes); };
+      t.onerror = () => { URL.revokeObjectURL(url); raw(); };
+      t.src = url;
+    }
+  }).catch(() => cb(null));
 }
 function comprimirImagen(file, maxDim, cb) {
   archivoAImagen(file, (img) => {
