@@ -196,37 +196,56 @@ function orientarCanvas(src, w, h, orient) {
   ctx.drawImage(src, 0, 0);
   return cv;
 }
-/* Carga un archivo como imagen YA ORIENTADA. Soporta RAW (.ARW…) vía su JPEG embebido.
-   Prefiere createImageBitmap({imageOrientation:'from-image'}); si no, aplica EXIF a mano. */
+/* Lee la orientación (1..8) de la cabecera TIFF de un RAW (.ARW empieza con II o MM). */
+function leerOrientacionTiff(bytes) {
+  const little = bytes[0] === 0x49 && bytes[1] === 0x49;
+  const big = bytes[0] === 0x4D && bytes[1] === 0x4D;
+  if (!little && !big) return 1;
+  const u16 = (o) => little ? (bytes[o] | (bytes[o + 1] << 8)) : ((bytes[o] << 8) | bytes[o + 1]);
+  const u32 = (o) => (little ? (bytes[o] | (bytes[o + 1] << 8) | (bytes[o + 2] << 16) | (bytes[o + 3] << 24)) : ((bytes[o] << 24) | (bytes[o + 1] << 16) | (bytes[o + 2] << 8) | bytes[o + 3])) >>> 0;
+  const ifd0 = u32(4);
+  if (ifd0 + 2 >= bytes.length) return 1;
+  const n = u16(ifd0);
+  for (let i = 0; i < n; i++) { const e = ifd0 + 2 + i * 12; if (e + 10 > bytes.length) break; if (u16(e) === 0x0112) return u16(e + 8) || 1; }
+  return 1;
+}
+/* Carga un archivo como imagen YA ORIENTADA (determinista): obtiene los píxeles crudos
+   y aplica la orientación leída de EXIF (JPEG/HEIC) o de la cabecera TIFF (RAW .ARW). */
 function archivoAImagen(file, cb) {
   const tieneCIB = typeof createImageBitmap === "function";
-  const imgPath = (blob, ob) => {
+  const finalizar = (src, orient) => {
+    if (!src) { cb(null); return; }
+    const W = src.naturalWidth || src.width, H = src.naturalHeight || src.height;
+    cb(orient && orient !== 1 ? orientarCanvas(src, W, H, orient) : src);
+  };
+  const cargarCrudo = (blob, orient) => {
+    if (tieneCIB) createImageBitmap(blob).then((b) => finalizar(b, orient)).catch(() => cargarImg(blob, orient));
+    else cargarImg(blob, orient);
+  };
+  const cargarImg = (blob, orient) => {
     const url = URL.createObjectURL(blob);
     const img = new Image();
-    img.onload = () => {
-      const o = ob ? leerOrientacionExif(ob) : 1;
-      const W = img.naturalWidth || img.width, H = img.naturalHeight || img.height;
-      cb(o === 1 ? img : orientarCanvas(img, W, H, o));
-      setTimeout(() => URL.revokeObjectURL(url), 1500);
-    };
+    img.onload = () => { finalizar(img, orient); setTimeout(() => URL.revokeObjectURL(url), 1500); };
     img.onerror = () => { URL.revokeObjectURL(url); cb(null); };
     img.src = url;
-  };
-  const desdeBlob = (blob, ob) => {
-    if (tieneCIB) createImageBitmap(blob, { imageOrientation: "from-image" }).then((b) => cb(b)).catch(() => imgPath(blob, ob));
-    else imgPath(blob, ob);
   };
   const leerBuf = file.arrayBuffer ? file.arrayBuffer() : new Promise((res, rej) => { const r = new FileReader(); r.onload = (e) => res(e.target.result); r.onerror = rej; r.readAsArrayBuffer(file); });
   leerBuf.then((buf) => {
     const bytes = new Uint8Array(buf);
-    const raw = () => { const jpg = extraerJpegEmbebido(bytes); if (!jpg) { cb(null); return; } desdeBlob(new Blob([jpg], { type: "image/jpeg" }), jpg); };
+    const rawPath = () => {
+      const jpg = extraerJpegEmbebido(bytes);
+      if (!jpg) { cb(null); return; }
+      let o = leerOrientacionExif(jpg);
+      if (o === 1) o = leerOrientacionTiff(bytes);
+      cargarCrudo(new Blob([jpg], { type: "image/jpeg" }), o);
+    };
     if (tieneCIB) {
-      createImageBitmap(file, { imageOrientation: "from-image" }).then((b) => cb(b)).catch(raw);
+      createImageBitmap(file).then((b) => finalizar(b, leerOrientacionExif(bytes))).catch(rawPath);
     } else {
       const url = URL.createObjectURL(file);
       const t = new Image();
-      t.onload = () => { URL.revokeObjectURL(url); imgPath(file, bytes); };
-      t.onerror = () => { URL.revokeObjectURL(url); raw(); };
+      t.onload = () => { URL.revokeObjectURL(url); finalizar(t, leerOrientacionExif(bytes)); };
+      t.onerror = () => { URL.revokeObjectURL(url); rawPath(); };
       t.src = url;
     }
   }).catch(() => cb(null));
