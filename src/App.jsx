@@ -322,9 +322,17 @@ async function segmentarYRecortar(src, fondoNegro) {
   const mask = res.categoryMask;
   const mw = mask.width, mh = mask.height;
   const cat = mask.getAsUint8Array();
-  let cntPos = 0; for (let i = 0; i < cat.length; i++) if (cat[i] > 0) cntPos++;
-  const invert = cntPos > cat.length * 0.85;
-  const esPersona = (v) => invert ? v === 0 : v > 0;
+  // Decide qué etiqueta de la máscara es "persona" mirando la región central:
+  // el piloto va centrado, así que la etiqueta que domina el centro ES la persona.
+  // Robusto sin importar si el modelo usa 0/255 ni cuánto fondo haya en la foto.
+  const cx0 = Math.floor(mw * 0.35), cx1 = Math.ceil(mw * 0.65);
+  const cy0 = Math.floor(mh * 0.20), cy1 = Math.ceil(mh * 0.75);
+  let cenPos = 0, cenCero = 0;
+  for (let y = cy0; y < cy1; y++) for (let x = cx0; x < cx1; x++) {
+    if (cat[y * mw + x] > 0) cenPos++; else cenCero++;
+  }
+  const personaEsPositivo = cenPos >= cenCero;
+  const esPersona = (v) => personaEsPositivo ? v > 0 : v === 0;
   let minX = mw, minY = mh, maxX = -1, maxY = -1, count = 0;
   for (let y = 0; y < mh; y++) for (let x = 0; x < mw; x++) {
     if (esPersona(cat[y * mw + x])) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; count++; }
@@ -1481,6 +1489,7 @@ function AcreditacionFlow({ db, persist }) {
   const [editPiloto, setEditPiloto] = useState(null);
   const [cobrando, setCobrando] = useState(null);
   const [filtroEstado, setFiltroEstado] = useState(null); // acreditado | poracr | pre | sinreg
+  const [filtroCat, setFiltroCat] = useState(null); // filtro por categoría
 
   const fecha = TODAS_FECHAS[fechaId];
   const serie = fechaId.startsWith("cav") ? "CAV" : "CCV";
@@ -1497,17 +1506,28 @@ function AcreditacionFlow({ db, persist }) {
   const estadoDe = (p) => { const a = acrDe(p.id); return a?.estado === "acreditado" ? "acreditado" : a?.estado === "pre-acreditado" ? "pre" : "sinreg"; };
   const filtrados = pilotosFecha.filter((p) => {
     if (filtroEstado) { const e = estadoDe(p); if (filtroEstado === "poracr" ? e === "acreditado" : e !== filtroEstado) return false; }
+    if (filtroCat && ((p.categoria || "").trim() || "Sin categoría") !== filtroCat) return false;
     const t = q.trim().toLowerCase(); if (!t) return true;
     return nombreCompleto(p).toLowerCase().includes(t) || String(p.dorsal) === t || (p.dni || "").toLowerCase().replace(/[.\s]/g, "").includes(t.replace(/[.\s]/g, ""));
   }).sort((a, b) => prioridad(a) - prioridad(b) || (Number(a.dorsal) || 999) - (Number(b.dorsal) || 999));
   const FILTRO_LABEL = { acreditado: "Acreditados", poracr: "Por acreditar", pre: "Pre-acreditados", sinreg: "Sin registro" };
-  const verLista = q.trim() || filtroEstado;
+  const verLista = q.trim() || filtroEstado || filtroCat;
   const nPre = pilotosFecha.filter((p) => acrDe(p.id)?.estado === "pre-acreditado").length;
   const nTotal = pilotosFecha.length;
   const nAcr = pilotosFecha.filter((p) => acrDe(p.id)?.estado === "acreditado").length;
   const nPorAcr = nTotal - nAcr;
   const nSinReg = pilotosFecha.filter((p) => !acrDe(p.id)).length;
   const pctAcr = nTotal ? Math.round((nAcr / nTotal) * 100) : 0;
+  // Desglose de ACREDITADOS por categoría (orden: mayor cantidad primero)
+  const acrPorCategoria = (() => {
+    const m = {};
+    pilotosFecha.forEach((p) => {
+      if (acrDe(p.id)?.estado !== "acreditado") return;
+      const c = (p.categoria || "").trim() || "Sin categoría";
+      m[c] = (m[c] || 0) + 1;
+    });
+    return Object.entries(m).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  })();
 
   const setTrazado = (fid, data) => {
     const fechasImg = { ...(db.fechasImg || {}) };
@@ -1591,11 +1611,32 @@ function AcreditacionFlow({ db, persist }) {
           <button className={"rstat pre" + (filtroEstado === "pre" ? " on" : "")} onClick={() => setFiltroEstado(filtroEstado === "pre" ? null : "pre")}><b>{nPre}</b><span>Pre-acreditados</span></button>
           <button className={"rstat none" + (filtroEstado === "sinreg" ? " on" : "")} onClick={() => setFiltroEstado(filtroEstado === "sinreg" ? null : "sinreg")}><b>{nSinReg}</b><span>Sin registro</span></button>
         </div>
+        {acrPorCategoria.length > 0 && (
+          <div className="resumen-cats">
+            <div className="resumen-cats-title">Acreditados por categoría</div>
+            <div className="resumen-cats-grid">
+              {acrPorCategoria.map(([cat, n]) => {
+                const on = filtroCat === cat && filtroEstado === "acreditado";
+                return (
+                  <button
+                    key={cat}
+                    className={"cat-chip" + (on ? " on" : "")}
+                    title={`Ver ${cat} acreditados`}
+                    onClick={() => { setFiltroCat(on ? null : cat); setFiltroEstado(on ? null : "acreditado"); }}
+                  >
+                    <span className="cat-name">{cat}</span>
+                    <span className="cat-n">{n}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       {nPre > 0 && <div className="info-bar"><ClipboardCheck size={15} /> {nPre} piloto(s) pre-acreditado(s) en esta fecha — emite e imprime su pase para firmar, timbrar y entregar a CAMOD.</div>}
 
-      {filtroEstado && <div className="filtro-chip">Mostrando: <b>{FILTRO_LABEL[filtroEstado]}</b> ({filtrados.length})<button onClick={() => setFiltroEstado(null)}><X size={13} /> Limpiar</button></div>}
+      {(filtroEstado || filtroCat) && <div className="filtro-chip">Mostrando: <b>{[filtroEstado && FILTRO_LABEL[filtroEstado], filtroCat].filter(Boolean).join(" · ")}</b> ({filtrados.length})<button onClick={() => { setFiltroEstado(null); setFiltroCat(null); }}><X size={13} /> Limpiar</button></div>}
 
       <div className="staff-list">
         {!verLista && <div className="hint-row"><Search size={14} /> Busca un piloto, o toca una tarjeta del resumen para ver esos pilotos.</div>}
@@ -2942,6 +2983,15 @@ select.inp{appearance:auto}
 .resumen-bar{height:8px;background:#EEF1F6;border-radius:6px;overflow:hidden;margin-bottom:12px}
 .resumen-fill{height:100%;background:#16A34A;border-radius:6px;transition:width .3s}
 .resumen-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.resumen-cats{margin-top:12px;border-top:1px solid #EEF1F6;padding-top:12px}
+.resumen-cats-title{font-size:.74rem;font-weight:700;color:#5A6478;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
+.resumen-cats-grid{display:flex;flex-wrap:wrap;gap:6px}
+.cat-chip{display:inline-flex;align-items:center;gap:8px;background:#F4F6FB;border:1px solid #E6E9F0;border-radius:999px;padding:5px 6px 5px 12px;cursor:pointer;font-size:.82rem;color:#1B2540;transition:background .15s,border-color .15s}
+.cat-chip:hover{background:#E9EEF8;border-color:#C9D3E8}
+.cat-chip.on{background:#16A34A;border-color:#16A34A;color:#fff}
+.cat-chip .cat-name{font-weight:600}
+.cat-chip .cat-n{background:#fff;color:#1B2540;font-weight:800;border-radius:999px;min-width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;padding:0 6px;font-size:.8rem}
+.cat-chip.on .cat-n{background:rgba(255,255,255,.25);color:#fff}
 .rstat{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 4px;border-radius:8px;background:#F7F8FB}
 .rstat b{font-size:1.4rem;line-height:1.1}
 .rstat span{font-size:.72rem;color:#5A6478;margin-top:2px;text-align:center}
